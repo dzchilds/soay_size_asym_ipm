@@ -65,12 +65,11 @@ processed_post <-
   ) %>%
   group_by(demog.var, p)
 
-unique(processed_post$p)
-
 par_fix_post <- filter(processed_post, !grepl("r_2_", p))
 par_ran_post <- filter(processed_post,  grepl("r_2_", p))
 
 unique(processed_post$demog.var)
+unique(filter(processed_post, demog.var == "lamb.birth")$p)
 
 ## quick look at a specific posterior distribution
 processed_post %>% 
@@ -81,7 +80,6 @@ processed_post %>%
   ggplot(aes(x = value)) + 
   geom_histogram() + 
   geom_vline(xintercept = 0, col = "red")
-  
 
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 ## 
@@ -92,16 +90,77 @@ par_fix <-
   select(-iteration, -chain) %>%
   summarise_if(is.numeric, mean)
 
-
-
-n_funs <- length(file_names)
-build_demog_funs <- vector(mode   = "list", length = n_funs)
-names(build_demog_funs) <- names(file_names)
-rm(n_funs)
-
-build_demog_funs$bw_lmb <- function(p, x1, x) {
-  
+build_bw_lmb <- function(nodes, mod_par) {
+  # assign the model parameters + integration nodes
+  list2env(nodes,   envir = sys.frame(1))
+  list2env(mod_par, envir = sys.frame(1))
+  # 
+  calc_equi_dens <- build_equi_dens(x, theta)
+  # calculate the terms that don't vary
+  fixed <- b_0_f + b_a1_f * a + b_z1_f * log(x) + b_az_f * a * log(x) + b_a2_f * a^2
+  # 
+  fixed_s_f <- log(fixed)
+  fixed_s_m <- log(fixed + b_0_m )
+  fixed_t_f <- log(fixed + b_0_tw)
+  fixed_t_m <- log(fixed + b_0_m + b_0_tw)
+  #
+  function(i, n_t) {
+    #
+    env_eff <- yr_ef[i,1] + (gamma + yr_ef[i,2]) * calc_equi_dens(n_t)
+    #
+    to_state <- vector(mode = "list", length = 4)
+    # FIX ME!
+    to_state$s_f <- function () { # singleton females
+      dnorm(x1, mean = fixed_s_f + env_eff, sd = sigma)
+    }
+    to_state$s_m <- function () { # singleton males
+      dnorm(x1, mean = fixed_s_m + env_eff, sd = sigma)
+    }
+    to_state$t_f <- function () { # twin females
+      dnorm(x1, mean = fixed_t_f + env_eff, sd = sigma)
+    }
+    to_state$t_m <- function () { # twin males
+      dnorm(x1, mean = fixed_t_m + env_eff, sd = sigma)
+    }
+  }
 }
+
+
+
+tmp <- list(a = 10, b = 2)
+f_test <- function(pars) {
+  list2env(tmp, envir = sys.frame(1))
+  function(n) n * a
+}
+f_test(tmp)(4)
+a
+b
+rm(a, b)
+
+
+
+build_demog_funs$bw_lmb_f1 <- function(x1, x, a, m, p) {
+  mu_part <- p["b_0_f"] + p["b_0_tw"] + p["b_a1_f"]*a + p["b_a1_f"]*a^2 + p["b_az_f"]*a*log(x)
+  function() {
+    
+  }
+}
+
+build_demog_funs$bw_lmb_f1 <- function(x1, x, a, m, p) {
+  mu_part <- p["b_0_f"] + p["b_0_tw"] + p["b_a1_f"]*a + p["b_a1_f"]*a^2 + p["b_az_f"]*a*log(x)
+  function() {
+    
+  }
+}
+
+
+build_demog_funs$bw_lmb_m <- function(x1, x, a, m, p) {
+  mu_part <- p["b_0_f"] + p["b_0_m"] + p["b_0_tw"] + 
+  function() {
+      
+  }
+}
+
   
 
 
