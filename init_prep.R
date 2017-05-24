@@ -88,46 +88,74 @@ processed_post %>%
 par_fix <- 
   par_fix_post %>%
   select(-iteration, -chain) %>%
-  summarise_if(is.numeric, mean)
+  summarise_if(is.numeric, mean) %>% 
+  split(.$demog.var) %>%
+  lapply(function(df) {
+    pars <- df$value
+    names(pars) <- df$p
+    as.list(pars)
+  })
 
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 ## 
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
+
+build_calc_equi_dens <- function(x) {
+  dx <- x[2]-x[1]
+  function(n_t, theta) {
+    sum(n_t * x^theta) * dx / x^theta
+  }
+}
 
 build_su <- function(int_nod, mod_par) {
   # assign the model parameters + integration nodes
   list2env(int_nod, envir = sys.frame(1))
   list2env(mod_par, envir = sys.frame(1))
   # construct equivalent density function
-  calc_equi_dens <- build_equi_dens(x, theta)
-  # calculate the terms that don't vary
-  fixed_f <- b_0_f + b_z1_f * log(x) + 
-  fixed_m <- b_0_m + b_z1_m * log(x) + fixed_f
-  # 
-  fixed_f_by_age <- vector(mode = "list", length = n_ages)
-  fixed_m_by_age <- vector(mode = "list", length = n_ages)
+  calc_equi_dens <- build_calc_equi_dens(x)
   #
-  for (i in seq_len(n_ages)) {
-    fixed_f_by_age[[i]] <- 
-      fixed_f + b_a1_f * a + b_a2_f * a^2
-    fixed_m_by_age[[i]] <- 
-      fixed_m + b_a1_m * a + b_a2_m * a^2 + fixed_f_by_age[[i]]
-  }
+  age_set <- seq.int(0, n_ages - 1)
+  #
+  fixed_f <- lapply(age_set, function(a) {
+    b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2
+  })
+  fixed_m <- lapply(age_set, function(a) {
+    b_0_m + b_z1_m * log(x) + b_a1_m * a + b_a2_m * a^2 + fixed_f[[a+1]]
+  })
   # 
   function(i, n_t) {
     #
-    env_eff <- yr_ef[i,1] + (gamma + yr_ef[i,2]) * calc_equi_dens(n_t)
+    env_eff <- yr_ef[i,1] + (gamma + yr_ef[i,2]) * calc_equi_dens(n_t, theta)
     # 
-    age <- vector(mode = "list", length = n_ages)
-    #
-    for (i in seq_len(n_ages)) {
-      age[[i]] <- function() {
-        
-      }
-    }
+    sex   <- list()
+    sex$f <- lapply(age_set, function(a) {
+      1/(1+exp(-(env_eff + fixed_f[[a+1]])))
+    })
+    sex$m <- lapply(age_set, function(a) {
+      1/(1+exp(-(env_eff + fixed_m[[a+1]])))
+    })
+    return(sex)
   }
-  
 }
+
+
+
+
+
+
+mp <- c(par_fix$survival, n_ages = 20, 
+        list(yr_ef = matrix(0, ncol = 2)))
+
+x_vals <- seq(2, 60, length = 100)
+
+nd <- list(x = x_vals)
+
+f1 <- build_calc_equi_dens(x_vals)
+nt <- 500 * dnorm(x_vals, mean = 22, sd = 2.5)
+plot(x_vals, f1(nt, 0.5))
+
+f <- build_su(nd, mp)
+plot(x_vals, f(1, nt)$f[[8]], ylim = c(0,1))
 
 
 build_bw_lmb <- function(nodes, mod_par) {
@@ -135,7 +163,7 @@ build_bw_lmb <- function(nodes, mod_par) {
   list2env(nodes,   envir = sys.frame(1))
   list2env(mod_par, envir = sys.frame(1))
   # 
-  calc_equi_dens <- build_equi_dens(x, theta)
+  calc_equi_dens <- build_equi_dens(x)
   # calculate the terms that don't vary
   fixed <- b_0_f + b_a1_f * a + b_z1_f * log(x) + b_az_f * a * log(x) + b_a2_f * a^2
   # 
@@ -146,72 +174,16 @@ build_bw_lmb <- function(nodes, mod_par) {
   #
   function(i, n_t) {
     #
-    env_eff <- yr_ef[i,1] + (gamma + yr_ef[i,2]) * calc_equi_dens(n_t)
+    env_eff <- yr_ef[i,1] + (gamma + yr_ef[i,2]) * calc_equi_dens(n_t, theta)
     #
     to_state <- vector(mode = "list", length = 4)
-    # FIX ME!
-    to_state$s_f <- function () { # singleton females
-      dnorm(x1, mean = fixed_s_f + env_eff, sd = sigma)
-    }
-    to_state$s_m <- function () { # singleton males
-      dnorm(x1, mean = fixed_s_m + env_eff, sd = sigma)
-    }
-    to_state$t_f <- function () { # twin females
-      dnorm(x1, mean = fixed_t_f + env_eff, sd = sigma)
-    }
-    to_state$t_m <- function () { # twin males
-      dnorm(x1, mean = fixed_t_m + env_eff, sd = sigma)
-    }
+    # 
+    to_state$s_f <- dnorm(x1, mean = fixed_s_f + env_eff, sd = sigma) / x1
+    to_state$s_m <- dnorm(x1, mean = fixed_s_m + env_eff, sd = sigma) / x1
+    to_state$t_f <- dnorm(x1, mean = fixed_t_f + env_eff, sd = sigma) / x1 
+    to_state$t_m <- dnorm(x1, mean = fixed_t_m + env_eff, sd = sigma) / x1
   }
 }
-
-
-
-tmp <- list(a = 10, b = 2)
-f_test <- function(pars) {
-  list2env(tmp, envir = sys.frame(1))
-  function(n) n * a
-}
-f_test(tmp)(4)
-a
-b
-rm(a, b)
-
-
-
-build_demog_funs$bw_lmb_f1 <- function(x1, x, a, m, p) {
-  mu_part <- p["b_0_f"] + p["b_0_tw"] + p["b_a1_f"]*a + p["b_a1_f"]*a^2 + p["b_az_f"]*a*log(x)
-  function() {
-    
-  }
-}
-
-build_demog_funs$bw_lmb_f1 <- function(x1, x, a, m, p) {
-  mu_part <- p["b_0_f"] + p["b_0_tw"] + p["b_a1_f"]*a + p["b_a1_f"]*a^2 + p["b_az_f"]*a*log(x)
-  function() {
-    
-  }
-}
-
-
-build_demog_funs$bw_lmb_m <- function(x1, x, a, m, p) {
-  mu_part <- p["b_0_f"] + p["b_0_m"] + p["b_0_tw"] + 
-  function() {
-      
-  }
-}
-
-  
-
-
-
-
-
-
-
-
-
-
 
 
 
