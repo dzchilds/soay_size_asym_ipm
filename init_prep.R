@@ -69,7 +69,7 @@ par_fix_post <- filter(processed_post, !grepl("r_2_", p))
 par_ran_post <- filter(processed_post,  grepl("r_2_", p))
 
 unique(processed_post$demog.var)
-unique(filter(processed_post, demog.var == "lamb.birth")$p)
+unique(filter(processed_post, demog.var == "survival")$p)
 
 ## quick look at a specific posterior distribution
 processed_post %>% 
@@ -89,6 +89,46 @@ par_fix <-
   par_fix_post %>%
   select(-iteration, -chain) %>%
   summarise_if(is.numeric, mean)
+
+## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
+## 
+## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
+
+build_su <- function(int_nod, mod_par) {
+  # assign the model parameters + integration nodes
+  list2env(int_nod, envir = sys.frame(1))
+  list2env(mod_par, envir = sys.frame(1))
+  # construct equivalent density function
+  calc_equi_dens <- build_equi_dens(x, theta)
+  # calculate the terms that don't vary
+  fixed_f <- b_0_f + b_z1_f * log(x) + 
+  fixed_m <- b_0_m + b_z1_m * log(x) + fixed_f
+  # 
+  fixed_f_by_age <- vector(mode = "list", length = n_ages)
+  fixed_m_by_age <- vector(mode = "list", length = n_ages)
+  #
+  for (i in seq_len(n_ages)) {
+    fixed_f_by_age[[i]] <- 
+      fixed_f + b_a1_f * a + b_a2_f * a^2
+    fixed_m_by_age[[i]] <- 
+      fixed_m + b_a1_m * a + b_a2_m * a^2 + fixed_f_by_age[[i]]
+  }
+  # 
+  function(i, n_t) {
+    #
+    env_eff <- yr_ef[i,1] + (gamma + yr_ef[i,2]) * calc_equi_dens(n_t)
+    # 
+    age <- vector(mode = "list", length = n_ages)
+    #
+    for (i in seq_len(n_ages)) {
+      age[[i]] <- function() {
+        
+      }
+    }
+  }
+  
+}
+
 
 build_bw_lmb <- function(nodes, mod_par) {
   # assign the model parameters + integration nodes
