@@ -2,6 +2,8 @@ library(dplyr)
 library(ggplot2)
 library(magrittr)
 
+options(stringsAsFactors = FALSE)
+
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 ## Read in / process the posterior samples
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
@@ -100,7 +102,28 @@ par_fix <-
 ## 
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 
-build_calc_equi_dens <- function(x) {
+# 
+# assignment happens in the environment where the function is evaluated
+# 
+assign_required <- function(int_nod, mod_par) {
+  # build the equivalent density function and assign
+  equ_den <- list(equ_den = build_equ_den(int_nod$x))
+  list2env(equ_den, envir = parent.frame())
+  # expand the integration nodes and assign
+  int_nod <- do.call(expand.grid, int_nod)
+  list2env(int_nod, envir = parent.frame())
+  # assign the model parameters
+  mod_par <- as.list(mod_par)
+  list2env(mod_par, envir = parent.frame())
+}
+
+mk_list_array <- function(states) {
+  dims <- sapply(states, length)
+  data <- vector(mode = "list", length = prod(dims))
+  array(data, dims, states)
+}
+
+build_equ_den <- function(x) {
   dx <- x[2]-x[1]
   function(n_t, theta) {
     sum(n_t * x^theta) * dx / x^theta
@@ -108,13 +131,11 @@ build_calc_equi_dens <- function(x) {
 }
 
 build_su <- function(int_nod, mod_par) {
-  # assign the model parameters + integration nodes
-  list2env(int_nod, envir = sys.frame(1))
-  list2env(mod_par, envir = sys.frame(1))
-  # construct equivalent density function
-  calc_equi_dens <- build_calc_equi_dens(x)
-  #
-  age_set <- seq.int(0, n_ages - 1)
+  # store age set and remove from 'int_nod'
+  age_set <- int_nod$a
+  int_nod <- int_nod[names(int_nod) != "a"]
+  # 
+  assign_required(int_nod, mod_par)
   #
   fixed_f <- lapply(age_set, function(a) {
     b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2
@@ -125,65 +146,109 @@ build_su <- function(int_nod, mod_par) {
   # 
   function(i, n_t) {
     #
-    env_eff <- yr_ef[i,1] + (gamma + yr_ef[i,2]) * calc_equi_dens(n_t, theta)
+    env_eff <- yr_ef[i,1] + (gamma + yr_ef[i,2]) * equ_den(n_t, theta)
     # 
-    sex   <- list()
-    sex$f <- lapply(age_set, function(a) {
+    from_sex   <- list()
+    from_sex$f <- lapply(age_set, function(a) {
       1/(1+exp(-(env_eff + fixed_f[[a+1]])))
     })
-    sex$m <- lapply(age_set, function(a) {
+    from_sex$m <- lapply(age_set, function(a) {
       1/(1+exp(-(env_eff + fixed_m[[a+1]])))
     })
-    return(sex)
+    function(s, a) from_sex[[s]][[a+1]]
   }
 }
 
-
-
-
-
-
-mp <- c(par_fix$survival, n_ages = 20, 
-        list(yr_ef = matrix(0, ncol = 2)))
-
-x_vals <- seq(2, 60, length = 100)
-
-nd <- list(x = x_vals)
-
-f1 <- build_calc_equi_dens(x_vals)
-nt <- 500 * dnorm(x_vals, mean = 22, sd = 2.5)
-plot(x_vals, f1(nt, 0.5))
-
-f <- build_su(nd, mp)
-plot(x_vals, f(1, nt)$f[[8]], ylim = c(0,1))
-
-
-build_bw_lmb <- function(nodes, mod_par) {
-  # assign the model parameters + integration nodes
-  list2env(nodes,   envir = sys.frame(1))
-  list2env(mod_par, envir = sys.frame(1))
+build_gr <- function(int_nod, mod_par) {
+  # store age set and remove from 'int_nod'
+  age_set <- int_nod$a
+  int_nod <- int_nod[names(int_nod) != "a"]
   # 
-  calc_equi_dens <- build_equi_dens(x)
-  # calculate the terms that don't vary
-  fixed <- b_0_f + b_a1_f * a + b_z1_f * log(x) + b_az_f * a * log(x) + b_a2_f * a^2
-  # 
-  fixed_s_f <- log(fixed)
-  fixed_s_m <- log(fixed + b_0_m )
-  fixed_t_f <- log(fixed + b_0_tw)
-  fixed_t_m <- log(fixed + b_0_m + b_0_tw)
+  assign_required(int_nod, mod_par)
   #
+  fixed_f <- lapply(age_set, function(a) {
+    b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2
+  })
+  fixed_m <- lapply(age_set, function(a) {
+    b_0_m + b_z1_m * log(x) + b_a1_m * a + b_a2_m * a^2 + fixed_f[[a+1]]
+  })
+  # 
   function(i, n_t) {
     #
-    env_eff <- yr_ef[i,1] + (gamma + yr_ef[i,2]) * calc_equi_dens(n_t, theta)
-    #
-    to_state <- vector(mode = "list", length = 4)
+    env_eff <- yr_ef[i,1] + (gamma + yr_ef[i,2]) * equ_den(n_t, theta)
     # 
-    to_state$s_f <- dnorm(x1, mean = fixed_s_f + env_eff, sd = sigma) / x1
-    to_state$s_m <- dnorm(x1, mean = fixed_s_m + env_eff, sd = sigma) / x1
-    to_state$t_f <- dnorm(x1, mean = fixed_t_f + env_eff, sd = sigma) / x1 
-    to_state$t_m <- dnorm(x1, mean = fixed_t_m + env_eff, sd = sigma) / x1
+    from_sex   <- list()
+    from_sex$f <- lapply(age_set, function(a) {
+      dnorm(log(x1), mean = env_eff + fixed_f[[a+1]], sd = sigma) / x1
+    })
+    from_sex$m <- lapply(age_set, function(a) {
+      dnorm(log(x1), mean = env_eff + fixed_m[[a+1]], sd = sigma) / x1
+    })
+    function(s, a) from_sex[[s]][[a+1]]
   }
 }
 
+
+## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
+## Testing
+## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
+
+x_vals <- seq(5, 40, length = 250)
+nt <- 500 * dnorm(x_vals, mean = 12, sd = 2)
+# survival
+mp <- c(par_fix$survival, list(yr_ef = matrix(0, ncol = 2)))
+nd <- list(x = x_vals, a = 0:20)
+f1 <- build_su(nd, mp)
+f2 <- f1(1, nt)
+plot(x_vals, f2("f", 10), ylim = c(0,1))
+# growth
+mp <- c(par_fix$growth, list(yr_ef = matrix(0, ncol = 2)))
+nd <- list(x1 = x_vals, x = x_vals, a = 0:20)
+f1 <- build_gr(nd, mp)
+f2 <- f1(1, nt)
+gk <- f2("f", 1)
+dim(gk) <- rep(length(x_vals), 2)
+image(x_vals, x_vals, gk, col = heat.colors(512))
+
+
+
+
+build_bw_lmb <- function(int_nod, mod_par) {
+  # 
+  assign_required(int_nod, mod_par)
+  #
+  to_states <- list(c("f","m"), c("s","t"))
+  # calculate the terms that don't vary
+  ref <- b_0_f + b_a1_f * a + b_z1_f * log(x) + 
+                   b_az_f * a * log(x) + b_a2_f * a^2
+  # 
+  fixed <- mk_list_array(to_states)
+  fixed[["f","s"]] <- ref
+  fixed[["m","s"]] <- ref + b_0_m
+  fixed[["f","t"]] <- ref + b_0_tw
+  fixed[["m","t"]] <- ref + b_0_m + b_0_tw
+  #
+  function(i, n_t) {
+    env_eff <- yr_ef[i,1] + (gamma + yr_ef[i,2]) * equ_den(n_t, theta)
+    to <- mk_list_array(to_states)
+    to[["f","s"]] <- dnorm(log(x1), fixed[["f","s"]] + env_eff, sigma) / x1
+    to[["m","s"]] <- dnorm(log(x1), fixed[["m","s"]] + env_eff, sigma) / x1
+    to[["f","t"]] <- dnorm(log(x1), fixed[["f","t"]] + env_eff, sigma) / x1 
+    to[["m","t"]] <- dnorm(log(x1), fixed[["m","t"]] + env_eff, sigma) / x1
+    function(s, n) to_state[[s, n]]
+  }
+}
+
+
+to_state <- vector(mode = "list", length = 4)
+dim(to_state) <- c(2, 2)
+dimnames(to_state) <- list(c("f","m"), c("s","t"))
+
+states <- list(c("f","m"), c("s","t"))
+
+
+mk_list_array(states)
+
+lapply(c("f","m"), function(nm) nm)
 
 
