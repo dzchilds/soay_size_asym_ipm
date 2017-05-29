@@ -99,7 +99,27 @@ par_fix <-
   })
 
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
-## 
+## utlity functions
+## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
+
+# 
+# inverse logit
+# 
+inv_logit <- function(x) {
+  1.0/(1.0+exp(-x))
+}
+
+# 
+# build an empty list in array form
+# 
+mk_list_array <- function(states) {
+  dims <- sapply(states, length)
+  data <- vector(mode = "list", length = prod(dims))
+  array(data, dims, states)
+}
+
+## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
+## utlity functions
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 
 # 
@@ -107,8 +127,8 @@ par_fix <-
 # 
 assign_required <- function(int_nod, mod_par) {
   # build the equivalent density function and assign
-  equ_den <- list(equ_den = build_equ_den(int_nod$x))
-  list2env(equ_den, envir = parent.frame())
+  expect_f <- list(expect_f = build_expect_f(int_nod$x))
+  list2env(expect_f, envir = parent.frame())
   # expand the integration nodes and assign
   int_nod <- do.call(expand.grid, int_nod)
   list2env(int_nod, envir = parent.frame())
@@ -117,19 +137,17 @@ assign_required <- function(int_nod, mod_par) {
   list2env(mod_par, envir = parent.frame())
 }
 
-mk_list_array <- function(states) {
-  dims <- sapply(states, length)
-  data <- vector(mode = "list", length = prod(dims))
-  array(data, dims, states)
-}
-
-build_equ_den <- function(x) {
+# 
+# calculate expectation required for equivalent density
+# 
+build_expect_f <- function(x) {
   dx <- x[2]-x[1]
-  function(n_t, theta) {
-    sum(n_t * x^theta) * dx / x^theta
-  }
+  function(n_t, theta) sum(n_t * x^theta) * dx
 }
 
+# 
+# winter survival function (sex by age)
+# 
 build_su <- function(int_nod, mod_par) {
   # store age set and remove from 'int_nod'
   age_set <- int_nod$a
@@ -137,28 +155,35 @@ build_su <- function(int_nod, mod_par) {
   # 
   assign_required(int_nod, mod_par)
   #
-  fixed_f <- lapply(age_set, function(a) {
+  states <- mk_list_array(list(c("f","m"), age_set))
+  # 
+  fixed       <- states
+  fixed["f",] <- lapply(age_set, function(a) {
     b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2
   })
-  fixed_m <- lapply(age_set, function(a) {
-    b_0_m + b_z1_m * log(x) + b_a1_m * a + b_a2_m * a^2 + fixed_f[[a+1]]
+  fixed["m",] <- lapply(age_set, function(a) {
+    b_0_m + b_z1_m * log(x) + b_a1_m * a + b_a2_m * a^2 + fixed[["f", a+1]]
   })
   # 
   function(i, n_t) {
+    from <- states
     #
-    env_eff <- yr_ef[i,1] + (gamma + yr_ef[i,2]) * equ_den(n_t, theta)
+    env_eff <- yr_ef[i,1] + 
+      (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta
     # 
-    from_sex   <- list()
-    from_sex$f <- lapply(age_set, function(a) {
-      1/(1+exp(-(env_eff + fixed_f[[a+1]])))
+    from["f",] <- lapply(age_set, function(a) {
+      inv_logit(env_eff + fixed[["f", a+1]])
     })
-    from_sex$m <- lapply(age_set, function(a) {
-      1/(1+exp(-(env_eff + fixed_m[[a+1]])))
+    from["m",] <- lapply(age_set, function(a) {
+      inv_logit(env_eff + fixed[["m", a+1]])
     })
-    function(s, a) from_sex[[s]][[a+1]]
+    function(s, a) from[[s, a+1]]
   }
 }
 
+# 
+# winter growth function (sex by age)
+# 
 build_gr <- function(int_nod, mod_par) {
   # store age set and remove from 'int_nod'
   age_set <- int_nod$a
@@ -166,41 +191,139 @@ build_gr <- function(int_nod, mod_par) {
   # 
   assign_required(int_nod, mod_par)
   #
-  fixed_f <- lapply(age_set, function(a) {
+  states <- mk_list_array(list(c("f","m"), age_set))
+  #
+  fixed       <- states
+  fixed["f",] <- lapply(age_set, function(a) {
     b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2
   })
-  fixed_m <- lapply(age_set, function(a) {
-    b_0_m + b_z1_m * log(x) + b_a1_m * a + b_a2_m * a^2 + fixed_f[[a+1]]
+  fixed["m",] <- lapply(age_set, function(a) {
+    b_0_m + b_z1_m * log(x) + b_a1_m * a + b_a2_m * a^2 + fixed[["f", a+1]]
   })
   # 
   function(i, n_t) {
+    from <- states
     #
-    env_eff <- yr_ef[i,1] + (gamma + yr_ef[i,2]) * equ_den(n_t, theta)
+    env_eff <- yr_ef[i,1] + 
+      (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta
     # 
-    from_sex   <- list()
-    from_sex$f <- lapply(age_set, function(a) {
-      dnorm(log(x1), mean = env_eff + fixed_f[[a+1]], sd = sigma) / x1
+    from["f",] <- lapply(age_set, function(a) {
+      dnorm(log(x1), mean = env_eff + fixed[["f", a+1]], sd = sigma) / x1
     })
-    from_sex$m <- lapply(age_set, function(a) {
-      dnorm(log(x1), mean = env_eff + fixed_m[[a+1]], sd = sigma) / x1
+    from["m",] <- lapply(age_set, function(a) {
+      dnorm(log(x1), mean = env_eff + fixed[["m", a+1]], sd = sigma) / x1
     })
-    function(s, a) from_sex[[s]][[a+1]]
+    function(s, a) from[[s, a+1]]
   }
 }
+
+# 
+# reproduction function (female only by age)
+# 
+build_rp <- function(int_nod, mod_par) {
+  # 
+  assign_required(int_nod, mod_par)
+  #
+  fixed <- b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2
+  # 
+  function(i, n_t) {
+    #
+    env_eff <- yr_ef[i,1] + 
+      (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta
+    # 
+    inv_logit(env_eff + fixed)
+  }
+}
+
+# 
+# reproduction function (female only by age)
+# 
+build_tw <- function(int_nod, mod_par) {
+  # 
+  assign_required(int_nod, mod_par)
+  #
+  fixed <- b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2
+  # 
+  function(i, n_t) {
+    #
+    env_eff <- yr_ef[i,1] + 
+      (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta
+    # 
+    inv_logit(env_eff + fixed) * (a > 0) # <- lambs can't have twins
+  }
+}
+
+# 
+# lamb size function (female only)
+# 
+build_bw_lmb <- function(int_nod, mod_par) {
+  # 
+  assign_required(int_nod, mod_par)
+  # calculate the terms that don't vary
+  fixed <- b_0_f + is_m * b_0_m + is_tw * b_0_tw + 
+           b_a1_f * a + b_z1_f * log(x) + b_az_f * a * log(x) + b_a2_f * a^2
+  #
+  function(i, n_t) {
+    env_eff <- yr_ef[i,1] + 
+      (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta
+    dnorm(log(x1), fixed + env_eff, sigma) / x1
+  }
+}
+
+build_su_lmb <- function(int_nod, mod_par) {
+  # 
+  assign_required(int_nod, mod_par)
+  # calculate the terms that don't vary
+  fixed <- b_0_f + is_m * b_0_m + is_tw * b_0_tw + 
+           b_z1_lm * log(x) + 
+           0.85 * 4 - 0.0735 * 4^2 - 0.833 * 3 - 0.00328 * 300
+  #
+  function(i, n_t) {
+    env_eff <- yr_ef[i,1] + 
+      (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta
+    inv_logit(fixed + env_eff)
+  }
+}
+
+build_gr_lmb <- function(int_nod, mod_par) {
+  # 
+  assign_required(int_nod, mod_par)
+  # calculate the terms that don't vary
+  fixed <- b_0_f + is_m * b_0_m + is_tw * b_0_tw + 
+    b_z1_lm * log(x) + 
+    0.027 * 4 - 0.0027 * 4^2 - 0.133 * 3 - 0.00021 * 300
+  #
+  function(i, n_t) {
+    env_eff <- yr_ef[i,1] + 
+      (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta
+    dnorm(log(x1), fixed + env_eff, sigma) / x1
+  }
+}
+
+
+
+
+
 
 
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 ## Testing
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 
-x_vals <- seq(5, 40, length = 250)
+x_vals <- seq(5, 40, length = 50)
 nt <- 500 * dnorm(x_vals, mean = 12, sd = 2)
 # survival
 mp <- c(par_fix$survival, list(yr_ef = matrix(0, ncol = 2)))
 nd <- list(x = x_vals, a = 0:20)
 f1 <- build_su(nd, mp)
 f2 <- f1(1, nt)
-plot(x_vals, f2("f", 10), ylim = c(0,1))
+plot(x_vals, f2("f", 6), ylim = c(0,1))
+
+system.time(for (i in 1:1e5) {
+  f2 <- f1(1, nt)
+  for (j in 1:20) f2("f", 5)
+})
+
 # growth
 mp <- c(par_fix$growth, list(yr_ef = matrix(0, ncol = 2)))
 nd <- list(x1 = x_vals, x = x_vals, a = 0:20)
@@ -211,44 +334,61 @@ dim(gk) <- rep(length(x_vals), 2)
 image(x_vals, x_vals, gk, col = heat.colors(512))
 
 
+### fastest way to store discrete states
+
+n1 <- 25 # n mesh
+n2 <- 12 # n states
+n_sim <- 1e4
+x_sml <- 1:n1
+x_big <- 1:(n1*n2)
+
+M_sml <- matrix(rnorm(n1^2), nrow = n1, ncol = n1)
+M_big <- matrix(rnorm(n1 * n1 * n2), nrow = n1, ncol = n1 * n2)
+
+system.time(
+  for (i in 1:n_sim) {
+    for (j in 1:n2) {
+      (M_sml * M_sml * M_sml * M_sml) %*% x_big[x_sml+2*n1]
+    } 
+    (M_big * M_big * M_big * M_big) %*% x_big
+  })
+
+system.time(
+  for (i in 1:n_sim) {
+    for (j in 1:n2) {
+      (M_sml * M_sml * M_sml * M_sml) %*% x_sml
+      (M_sml * M_sml * M_sml * M_sml) %*% x_sml
+    } 
+  })
 
 
-build_bw_lmb <- function(int_nod, mod_par) {
-  # 
-  assign_required(int_nod, mod_par)
-  #
-  to_states <- list(c("f","m"), c("s","t"))
-  # calculate the terms that don't vary
-  ref <- b_0_f + b_a1_f * a + b_z1_f * log(x) + 
-                   b_az_f * a * log(x) + b_a2_f * a^2
-  # 
-  fixed <- mk_list_array(to_states)
-  fixed[["f","s"]] <- ref
-  fixed[["m","s"]] <- ref + b_0_m
-  fixed[["f","t"]] <- ref + b_0_tw
-  fixed[["m","t"]] <- ref + b_0_m + b_0_tw
-  #
-  function(i, n_t) {
-    env_eff <- yr_ef[i,1] + (gamma + yr_ef[i,2]) * equ_den(n_t, theta)
-    to <- mk_list_array(to_states)
-    to[["f","s"]] <- dnorm(log(x1), fixed[["f","s"]] + env_eff, sigma) / x1
-    to[["m","s"]] <- dnorm(log(x1), fixed[["m","s"]] + env_eff, sigma) / x1
-    to[["f","t"]] <- dnorm(log(x1), fixed[["f","t"]] + env_eff, sigma) / x1 
-    to[["m","t"]] <- dnorm(log(x1), fixed[["m","t"]] + env_eff, sigma) / x1
-    function(s, n) to_state[[s, n]]
-  }
-}
+
+x <- 1:(n1*n2)
+n_calc <- n_sim
+system.time(for (i in 1:n_calc) (M * M * M) %*% x)
+
+###
+
+x <- list()
+x$f <- vector(mode = "list", length = 20)
+names(x$f) <- letters[1:20]
+x$m <- vector(mode = "list", length = 20)
+names(x$m) <- letters[1:20]
+system.time(for (i in 1:1e7) x[["m"]][["d"]] <- addto)
 
 
-to_state <- vector(mode = "list", length = 4)
-dim(to_state) <- c(2, 2)
-dimnames(to_state) <- list(c("f","m"), c("s","t"))
-
-states <- list(c("f","m"), c("s","t"))
+x <- mk_list_array(list(c("f","m"), letters[1:20]))
+addto <- 1:1000
+system.time(for (i in 1:1e7) x[["m","a"]] <- addto)
 
 
-mk_list_array(states)
+x <- mk_list_array(list(c("f","m"), letters[1:20]))
+dum_list <- vector(mode = "list", length = 21)
+names(dum_list) <- letters[1:21]
+x["f",] <- dum_list
+x
 
-lapply(c("f","m"), function(nm) nm)
+
+
 
 
