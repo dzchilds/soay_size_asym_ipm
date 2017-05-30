@@ -321,47 +321,51 @@ build_gr_lmb <- function(int_nod, mod_par) {
 ## utlity functions
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 
-# 
-# quadrature weights and nodes for midpoint rule
-# 
-quad_mid <- function(q) {
-  weights <- (q[2] - q[1]) / q[3]
-  nodes <- seq(q[1] + weights/2, q[2] - weights/2, length.out = q[3])
-  rule <- list(nodes, weights, q[3])
+numeric_midpoint <- function(x) {
+  weights <- (x[2] - x[1]) / x[3]
+  nodes <- seq(x[1] + weights/2, x[2] - weights/2, length.out = x[3])
+  rule <- list(nodes, weights, x[3])
   names(rule) <- c("val", "wgt", "num")
+  attr(rule, "state") <- "numeric"
+  attr(rule, "rule") <- "midpoint"
   rule
 }
 
-cat_discrete <- function(d) {
-  rule <- list(seq.int(d[1], d[2]), 1, d[2]-d[1]+1)
+numeric_integer <- function(x) {
+  rule <- list(seq.int(x[1], x[2]), 1, x[2]-x[1]+1)
   names(rule) <- c("val", "wgt", "num")
+  attr(rule, "state") <- "numeric"
+  attr(rule, "rule") <- "integer"
   rule
 }
 
-cat_nominal <- function(n) {
-  rule <- list(n, 1, length(n))
+categorical_nominal <- function(x) {
+  rule <- list(x, 1, length(x))
   names(rule) <- c("val", "wgt", "num")
+  attr(rule, "state") <- "categorical"
+  attr(rule, "rule") <- "nominal"
   rule
 }
 
+new_n_t <- function(...) {
+  #
+  dots <- list(...) 
+  # work out where to 
+  type_info <- sapply(dots, function(x) attributes(x)[c("state","rule")])
+  case1 <- type_info["state",] == "categorical"
+  case2 <- type_info["state",] == "numeric" & type_info["rule",] == "integer"
   
-new_n_t <- function(x, s, a) {
-  #
-  quad_x <- lapply(x, quad_mid)
-  cats_s <- cat_nominal(s)
-  cats_a <- cat_discrete(a)
-  # 
-  n_t <- mk_list_array(list(cats_s$val, cats_a$val))
+  list_part <- dots[case1 | case2]
+  n_t <- mk_list_array(lapply(list_part, '[[', "val"))
   attrib_n_t <- attributes(n_t)
-  zeros <- rep(0, quad_x$all$num)
+  
+  vect_part <- dots[!(case1 | case2)]
+  size <- prod(sapply(vect_part, '[[', "num"))
+  zeros <- rep(0, size)
   n_t <- lapply(n_t, function(dummy) zeros)
-  attributes(n_t) <- attrib_n_t
-  # 
-  attr(n_t, "x") <- quad_x
-  attr(n_t, "s") <- cats_s
-  attr(n_t, "a") <- cats_a
-  #
-  return(n_t)
+  
+  attributes(n_t) <- c(attrib_n_t, dots)
+  n_t
 }
 
 # careful -- order of states must match, here and in new_n_t
@@ -409,25 +413,26 @@ kern_nodes <- function(n_t, codomain, domain) {
 
 
 set_lambs <- function(n_t, size, mean, sd) { 
-  val <- attr(n_t, "x")$all$val
+  val <- attr(n_t, "x")$val
   n_t[["f", '0']] <- size * dnorm(val, mean = mean, sd = sd) / 2
   n_t[["m", '0']] <- size * dnorm(val, mean = mean, sd = sd) / 2
   n_t
 }
 
+
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 ## simulation code
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 
-x <- list(all = c(5,  40, 40), lmb = c(0.1, 4, 20))
-a <- c(0, 15)
-s <- c("f", "m")
+x <- numeric_midpoint(c(5,  40, 40))
+a <- numeric_integer(c(0, 15))
+s <- categorical_nominal(c("f", "m"))
 
-n_t_0 <- new_n_t(x = x, a = a, s = s)
+n_t_0 <- new_n_t(x = x, s = s, a = a)
 n_t_0 <- set_lambs(n_t_0, 200, 12, 1.5)
-n_t_0
+n_t_0[["f","0"]]
 
-marginal_density(n_t_0, c("s", "x"))
+for (i in 1:10000) marginal_density(n_t_0, c("s", "x"))
 
 node_sg <- kern_nodes(n_t_0, c("x_all"), c("x_all", "a"))
 
