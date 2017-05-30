@@ -1,5 +1,5 @@
-library(dplyr)
 library(ggplot2)
+library(dplyr)
 library(magrittr)
 
 options(stringsAsFactors = FALSE)
@@ -43,59 +43,70 @@ for (i in seq_along(file_names)) {
 }
 
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
-## Pull out samples from the posterior
+## Relabelling
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
+
+# lookup table for demographic function names
+c(survival      = "su",
+  growth        = "gr",
+  reproduction  = "rp",
+  twinning      = "tw",
+  lamb.birth    = "bw_lmb", 
+  lamb.growth   = "gr_lmb", 
+  lamb.survival = "su_lmb") -> func_labels
+
+# lookup table for parameter names
+c(intercept     = "b_0_f",
+  Intercept     = "b_0_f",
+  sexM          = "b_0_m",
+  sex.lambM     = "b_0_m",
+  z             = "b_z1_f",
+  z_sexM        = "b_z1_m",
+  age           = "b_a1_f",
+  sexM_age      = "b_a1_m",
+  IageE2        = "b_a2_f",
+  z_age         = "b_az_f",
+  sexM_IageE2   = "b_a2_m",
+  offaretwins   = "b_0_tw",
+  z_birth.lamb  = "b_z1_lm",
+  b_equivdens_1 = "gamma",
+  theta         = "theta",
+  sigma         = "sigma") -> parm_labels
 
 processed_post <- 
   bind_rows(processed_post) %>% 
-  rename(p = parameter) %>%
-  mutate(
-    p = ifelse(p == "intercept",     "b_0_f",  p),
-    p = ifelse(p == "Intercept",     "b_0_f",  p),
-    p = ifelse(p == "sexM",          "b_0_m",  p),
-    p = ifelse(p == "z",             "b_z1_f", p),
-    p = ifelse(p == "z_sexM",        "b_z1_m", p),
-    p = ifelse(p == "age",           "b_a1_f", p),
-    p = ifelse(p == "sexM_age",      "b_a1_m", p),
-    p = ifelse(p == "IageE2",        "b_a2_f", p),
-    p = ifelse(p == "z_age",         "b_az_f", p),
-    p = ifelse(p == "sexM_IageE2",   "b_a2_m", p),
-    p = ifelse(p == "b_equivdens_1", "gamma",  p),
-    p = ifelse(p == "sex.lambM",     "b_0_m",  p),
-    p = ifelse(p == "offaretwins",   "b_0_tw", p),
-    p = ifelse(p == "z_birth.lamb",  "b_z1_lm", p)
-  ) %>%
-  group_by(demog.var, p)
+  rename(p = parameter, f = demog.var) 
 
-par_fix_post <- filter(processed_post, !grepl("r_2_", p))
-par_ran_post <- filter(processed_post,  grepl("r_2_", p))
+par_fix_post <- 
+  filter(processed_post, !grepl("r_2_", p)) %>%
+  mutate(f = func_labels[f], p = parm_labels[p]) %>%
+  group_by(f, p)
 
-unique(processed_post$demog.var)
-unique(filter(processed_post, demog.var == "survival")$p)
-
-## quick look at a specific posterior distribution
-processed_post %>% 
-  filter(
-    demog.var == "lamb.growth",
-    p == "b_a1_f"
-  ) %>%
-  ggplot(aes(x = value)) + 
-  geom_histogram() + 
-  geom_vline(xintercept = 0, col = "red")
+par_ran_post <- 
+  filter(processed_post,  grepl("r_2_", p)) %>%
+  mutate(f = func_labels[f]) %>%
+  group_by(f, p)
+  
+unique(par_fix_post$f)
+unique(par_fix_post$p)
+unique(par_ran_post$f)
+unique(par_ran_post$p)
 
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 ## 
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 
+dummy_yr <- list(yr_ef = matrix(0, ncol = 2))
+
 par_fix <- 
   par_fix_post %>%
   select(-iteration, -chain) %>%
   summarise_if(is.numeric, mean) %>% 
-  split(.$demog.var) %>%
+  split(.$f) %>%
   lapply(function(df) {
     pars <- df$value
     names(pars) <- df$p
-    as.list(pars)
+    c(as.list(pars), dummy_yr)
   })
 
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
@@ -144,6 +155,10 @@ build_expect_f <- function(x) {
   dx <- x[2]-x[1]
   function(n_t, theta) sum(n_t * x^theta) * dx
 }
+
+## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
+## utlity functions
+## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 
 # 
 # winter survival function (sex by age)
@@ -208,10 +223,10 @@ build_gr <- function(int_nod, mod_par) {
       (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta
     # 
     from["f",] <- lapply(age_set, function(a) {
-      dnorm(log(x1), mean = env_eff + fixed[["f", a+1]], sd = sigma) / x1
+      dnorm(log(x_), mean = env_eff + fixed[["f", a+1]], sd = sigma) / x_
     })
     from["m",] <- lapply(age_set, function(a) {
-      dnorm(log(x1), mean = env_eff + fixed[["m", a+1]], sd = sigma) / x1
+      dnorm(log(x_), mean = env_eff + fixed[["m", a+1]], sd = sigma) / x_
     })
     function(s, a) from[[s, a+1]]
   }
@@ -266,7 +281,7 @@ build_bw_lmb <- function(int_nod, mod_par) {
   function(i, n_t) {
     env_eff <- yr_ef[i,1] + 
       (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta
-    dnorm(log(x1), fixed + env_eff, sigma) / x1
+    dnorm(log(x_), fixed + env_eff, sigma) / x_
   }
 }
 
@@ -298,38 +313,135 @@ build_gr_lmb <- function(int_nod, mod_par) {
   #
   function(i, n_t) {
     env_eff <- yr_ef[i,1]
-    dnorm(log(x1), fixed + env_eff, sigma) / x1
+    dnorm(log(x_), fixed + env_eff, sigma) / x_
   }
 }
 
+## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
+## utlity functions
+## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 
-build_get_age <- function(n_node) {
-  force(n_node)
-  function(n_t, a) nt[seq.int(1, n_node)+n_node*a] 
+# 
+# quadrature weights and nodes for midpoint rule
+# 
+quad_mid <- function(q) {
+  weights <- (q[2] - q[1]) / q[3]
+  nodes <- seq(q[1] + weights/2, q[2] - weights/2, length.out = q[3])
+  rule <- list(nodes, weights, q[3])
+  names(rule) <- c("val", "wgt", "num")
+  rule
 }
 
-n_node <- 50
-n_ages <- 15 
-a_set <- seq.int(0, n_ages-1)
-x_vals <- seq(5, 40,  length = n_node)
-x_lmb_vals <- seq(0.1, 4, length = n_node)
+cat_discrete <- function(d) {
+  rule <- list(seq.int(d[1], d[2]), 1, d[2]-d[1]+1)
+  names(rule) <- c("val", "wgt", "num")
+  rule
+}
 
-get_age <- build_get_age(n_node)
+cat_nominal <- function(n) {
+  rule <- list(n, 1, length(n))
+  names(rule) <- c("val", "wgt", "num")
+  rule
+}
 
-dummy_yr <- list(yr_ef = matrix(0, ncol = 2))
-mp_su <- c(par_fix$survival, dummy_yr)
-mp_gr <- c(par_fix$growth,   dummy_yr)
+  
+new_n_t <- function(x, s, a) {
+  #
+  quad_x <- lapply(x, quad_mid)
+  cats_s <- cat_nominal(s)
+  cats_a <- cat_discrete(a)
+  # 
+  n_t <- mk_list_array(list(cats_s$val, cats_a$val))
+  attrib_n_t <- attributes(n_t)
+  zeros <- rep(0, quad_x$all$num)
+  n_t <- lapply(n_t, function(dummy) zeros)
+  attributes(n_t) <- attrib_n_t
+  # 
+  attr(n_t, "x") <- quad_x
+  attr(n_t, "s") <- cats_s
+  attr(n_t, "a") <- cats_a
+  #
+  return(n_t)
+}
 
-node_sg <- list(x1 = x_vals, x = x_vals, a = a_set)
-su <- build_su(node_sg, mp_su)
-gr <- build_su(node_sg, mp_gr)
+# careful -- order of states must match, here and in new_n_t
+marginal_density <- function(n_t, margin = "x") {
+  # grab the bits we need
+  dims <- c(attr(n_t, "x")$all$num, attr(n_t, "s")$num, attr(n_t, "a")$num)
+  dx <- attr(n_t, "x")$all$wgt
+  #
+  n_t <- unlist(n_t)
+  dim(n_t) <- dims
+  m <- which(c("x", "s", "a") %in% margin)
+  n_t <- apply(n_t, m, sum)
+  # 
+  if (!("x" %in% margin)) n_t <- n_t * dx
+  n_t
+}
 
-su_t <- su(1, nt)
-gr_t <- gr(1, nt)
 
-a <- 1
-{su_t("f", a) * gr_t("f", a)} %*% get_age(n_t$f, a)
+extract_rules <- function(rules, match_str) {
 
+  splits <- strsplit(match_str, "_", fixed = TRUE)
+  depth <- sapply(splits, length)
+  pref <- sapply(splits, `[`, 1)
+  suff <- sapply(splits, `[`, 2)
+  out <- list()
+  for (i in seq_along(match_str)) {
+    if (depth[i]==1) {
+      out[[i]] <- rules[[pref[i]]] $ val
+    } 
+    if (depth[i]==2) {
+      out[[i]] <- rules[[ pref[i] ]][[ suff[i] ]] $ val
+    }
+  }
+  names(out) <- pref
+  out
+}
+
+kern_nodes <- function(n_t, codomain, domain) {
+  rules <- attributes(n_t)
+  cd <- extract_rules(rules, codomain)
+  dm <- extract_rules(rules, domain)
+  names(cd) <- paste0(names(cd), "1")
+  c(cd, dm)
+}
+
+
+set_lambs <- function(n_t, size, mean, sd) { 
+  val <- attr(n_t, "x")$all$val
+  n_t[["f", '0']] <- size * dnorm(val, mean = mean, sd = sd) / 2
+  n_t[["m", '0']] <- size * dnorm(val, mean = mean, sd = sd) / 2
+  n_t
+}
+
+## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
+## simulation code
+## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
+
+x <- list(all = c(5,  40, 40), lmb = c(0.1, 4, 20))
+a <- c(0, 15)
+s <- c("f", "m")
+
+n_t_0 <- new_n_t(x = x, a = a, s = s)
+n_t_0 <- set_lambs(n_t_0, 200, 12, 1.5)
+n_t_0
+
+marginal_density(n_t_0, c("s", "x"))
+
+node_sg <- kern_nodes(n_t_0, c("x_all"), c("x_all", "a"))
+
+su <- build_su(node_sg, par_fix$su)
+gr <- build_gr(node_sg, par_fix$gr)
+
+
+su_t <- su(1, n_t)
+gr_t <- gr(1, n_t)
+
+a <- 0
+P <- su_t("f", a) * gr_t("f", a)
+dim(P) <- 
+P %*% get_age(n_t$f, 0)
 
 
 
