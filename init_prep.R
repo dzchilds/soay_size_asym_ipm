@@ -331,10 +331,10 @@ numeric_midpoint <- function(x) {
   rule
 }
 
-numeric_integer <- function(x) {
+categorical_integer <- function(x) {
   rule <- list(seq.int(x[1], x[2]), 1, x[2]-x[1]+1)
   names(rule) <- c("val", "wgt", "num")
-  attr(rule, "state") <- "numeric"
+  attr(rule, "state") <- "categorical"
   attr(rule, "rule") <- "integer"
   rule
 }
@@ -347,76 +347,71 @@ categorical_nominal <- function(x) {
   rule
 }
 
+which_list_part <- function (states) {
+  type_info <- sapply(states, function(x) attributes(x)$state)
+  type_info == "categorical"
+}
+
 new_n_t <- function(...) {
   #
   dots <- list(...) 
-  # work out where to 
-  type_info <- sapply(dots, function(x) attributes(x)[c("state","rule")])
-  case1 <- type_info["state",] == "categorical"
-  case2 <- type_info["state",] == "numeric" & type_info["rule",] == "integer"
-  
-  list_part <- dots[case1 | case2]
+  # work out which states are in list form
+  is_list_part <- which_list_part(dots)
+  is_list_part
+  # build the list part of the state vector
+  list_part <- dots[is_list_part]
   n_t <- mk_list_array(lapply(list_part, '[[', "val"))
   attrib_n_t <- attributes(n_t)
-  
-  vect_part <- dots[!(case1 | case2)]
+  # insert the numeric state vector
+  vect_part <- dots[!is_list_part]
   size <- prod(sapply(vect_part, '[[', "num"))
-  zeros <- rep(0, size)
+  zeros <- vector(mode = "double", size)
   n_t <- lapply(n_t, function(dummy) zeros)
-  
-  attributes(n_t) <- c(attrib_n_t, dots)
+  # make sure the numeric states are 1st in the attributes
+  ord <- c(which(!is_list_part), which(is_list_part))
+  dots <- dots[ord]
+  # 
+  state_names <- list(state_names = names(dots))
+  #
+  state_rules <- sapply(dots, function(x) attributes(x)[c("state","rule")])
+  state_rules <- list(state_rules = state_rules)
+  # 
+  details <- sapply(dots, '[')
+  details <- list(details = details)
+  #
+  attributes(n_t) <- c(attrib_n_t, state_names, state_rules, details)
   n_t
 }
 
-# careful -- order of states must match, here and in new_n_t
 marginal_density <- function(n_t, margin = "x") {
-  # grab the bits we need
-  dims <- c(attr(n_t, "x")$all$num, attr(n_t, "s")$num, attr(n_t, "a")$num)
-  dx <- attr(n_t, "x")$all$wgt
+  #
+  attrib_n_t <- attributes(n_t)
   #
   n_t <- unlist(n_t)
-  dim(n_t) <- dims
-  m <- which(c("x", "s", "a") %in% margin)
+  dim(n_t) <- unlist(attrib_n_t$details["num",])
+  m <- which(attrib_n_t$state_names %in% margin)
   n_t <- apply(n_t, m, sum)
-  # 
-  if (!("x" %in% margin)) n_t <- n_t * dx
+  # GENERALISE THIS
+  dlta <- unlist(attrib_n_t$details["wgt",]) # <- only works if one weight
+  if (!("x" %in% margin)) n_t <- n_t * dlta["x"]
   n_t
 }
 
 
-extract_rules <- function(rules, match_str) {
-
-  splits <- strsplit(match_str, "_", fixed = TRUE)
-  depth <- sapply(splits, length)
-  pref <- sapply(splits, `[`, 1)
-  suff <- sapply(splits, `[`, 2)
-  out <- list()
-  for (i in seq_along(match_str)) {
-    if (depth[i]==1) {
-      out[[i]] <- rules[[pref[i]]] $ val
-    } 
-    if (depth[i]==2) {
-      out[[i]] <- rules[[ pref[i] ]][[ suff[i] ]] $ val
-    }
+kern_nodes <- function(...) {
+  dots <- list(...)
+  all <- list()
+  suffix <- ""
+  n <- length(dots)
+  for (i in seq_along(dots)) {
+    attribs <- attributes(dots[[n-i+1]])
+    is_numeric <- attribs$state_rules["state",] == "numeric"
+    keep <- attribs$details["val", is_numeric]
+    names(keep) <- paste0(attribs$state_names[is_numeric], suffix)
+    all[[n-i+1]] <- keep
+    suffix <- paste0(suffix ,"_")
   }
-  names(out) <- pref
-  out
-}
-
-kern_nodes <- function(n_t, codomain, domain) {
-  rules <- attributes(n_t)
-  cd <- extract_rules(rules, codomain)
-  dm <- extract_rules(rules, domain)
-  names(cd) <- paste0(names(cd), "1")
-  c(cd, dm)
-}
-
-
-set_lambs <- function(n_t, size, mean, sd) { 
-  val <- attr(n_t, "x")$val
-  n_t[["f", '0']] <- size * dnorm(val, mean = mean, sd = sd) / 2
-  n_t[["m", '0']] <- size * dnorm(val, mean = mean, sd = sd) / 2
-  n_t
+  all
 }
 
 
@@ -424,24 +419,34 @@ set_lambs <- function(n_t, size, mean, sd) {
 ## simulation code
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 
-x <- numeric_midpoint(c(5,  40, 40))
-a <- numeric_integer(c(0, 15))
-s <- categorical_nominal(c("f", "m"))
+set_lambs <- function(n_t, size, mean, sd) { 
+  val <- attr(n_t, "details")[["val", "x"]]
+  val
+  n_t[["f", '0']] <- size * dnorm(val, mean = mean, sd = sd) / 2
+  n_t[["m", '0']] <- size * dnorm(val, mean = mean, sd = sd) / 2
+  n_t
+}
 
-n_t_0 <- new_n_t(x = x, s = s, a = a)
-n_t_0 <- set_lambs(n_t_0, 200, 12, 1.5)
-n_t_0[["f","0"]]
+# set_lambs(n_t, 200, 12, 1.5)
 
-for (i in 1:10000) marginal_density(n_t_0, c("s", "x"))
+x_rule <- numeric_midpoint(c(5, 40, 40))
+a_rule <- categorical_integer(c(0, 15))
+s_rule <- categorical_nominal(c("f", "m"))
+x_lmb_rule <- numeric_midpoint(c(0.1, 4, 20))
 
-node_sg <- kern_nodes(n_t_0, c("x_all"), c("x_all", "a"))
+n_t <- new_n_t(x = x_rule, s = s_rule, a = a_rule)
+n_t <- set_lambs(n_t, 200, 12, 1.5)
+n_t[["f","0"]]
+attributes(n_t)
+
+node_sg <- kern_nodes(n_t, n_t)
 
 su <- build_su(node_sg, par_fix$su)
 gr <- build_gr(node_sg, par_fix$gr)
 
-
-su_t <- su(1, n_t)
-gr_t <- gr(1, n_t)
+n_z <- marginal_density(n_t, margin = "x")
+su_t <- su(1, n_z)
+gr_t <- gr(1, n_z)
 
 a <- 0
 P <- su_t("f", a) * gr_t("f", a)
