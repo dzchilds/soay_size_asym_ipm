@@ -182,7 +182,7 @@ build_su <- function(int_nod, mod_par) {
   # 
   function(i, n_t) {
     from <- states
-    #
+    # 
     env_eff <- yr_ef[i,1] + 
       (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta
     # 
@@ -397,23 +397,25 @@ marginal_density <- function(n_t, margin = "x") {
   n_t
 }
 
-
-kern_nodes <- function(...) {
+kernel_domain <- function(state, ...) {
+  
   dots <- list(...)
-  all <- list()
-  suffix <- ""
+  
   n <- length(dots)
+  values <- list()
+  suffix <- ""
+  
   for (i in seq_along(dots)) {
     attribs <- attributes(dots[[n-i+1]])
-    is_numeric <- attribs$state_rules["state",] == "numeric"
-    keep <- attribs$details["val", is_numeric]
-    names(keep) <- paste0(attribs$state_names[is_numeric], suffix)
-    all[[n-i+1]] <- keep
+    is_type <- attribs$state_rules["state",] == state
+    keep <- attribs$details["val", is_type]
+    names(keep) <- paste0(attribs$state_names[is_type], suffix)
+    values[[n-i+1]] <- keep
     suffix <- paste0(suffix ,"_")
   }
-  all
+  
+  do.call(c, values)
 }
-
 
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 ## simulation code
@@ -431,15 +433,107 @@ set_lambs <- function(n_t, size, mean, sd) {
 
 x_rule <- numeric_midpoint(c(5, 40, 40))
 a_rule <- categorical_integer(c(0, 15))
-s_rule <- categorical_nominal(c("f", "m"))
 x_lmb_rule <- numeric_midpoint(c(0.1, 4, 20))
+s_rule <- numeric_integer(c(0, 1))
+t_rule <- numeric_integer(c(0, 1))
 
 n_t <- new_n_t(x = x_rule, s = s_rule, a = a_rule)
 n_t <- set_lambs(n_t, 200, 12, 1.5)
 n_t[["f","0"]]
 attributes(n_t)
 
-node_sg <- kern_nodes(n_t, n_t)
+
+n_t <- new_n_t(x = x_rule, s = s_rule, a = a_rule)
+
+kernel_domain("numeric", n_t, n_t)
+
+
+assign_elements <- function(vec) {
+  list2env(as.list(vec), envir = parent.frame())
+}
+
+ipm_fun <- function(mod_par, f_fix, f_env, f_dmg, ...) {
+  #
+  dots <- list(...)
+  cat_states <- do.call(kernel_domain, c("categorical", dots))
+  num_states <- do.call(kernel_domain, c("numeric",     dots))
+  #
+  assign_elements(do.call(expand.grid, num_states))
+  # 
+  assign_elements(mod_par)
+  #
+  expect_f <- list(expect_f = build_expect_f(num_states$x))
+  assign_elements(expect_f)
+  #
+  a_set <- cat_states$a
+  a_num <- length(a_set)
+  
+  f_fix <- f_fix[[2]]
+  f_env <- f_env[[2]]
+  f_dmg <- f_dmg[[2]]
+  
+  f_fix_eval <- mk_list_array(cat_states)
+  for (a in head(a_set, -1)) {
+    f_fix_eval[[a + 2, a + 1]] <- eval(f_fix)
+  }
+  f_fix_eval[[a_num, a_num]] <- eval(f_fix)
+
+  function(i, n_t) {
+    fun <- mk_list_array(cat_states)
+    # 
+    f_env_eval <- eval(f_env)
+    # 
+    for (a in head(a_set, -1)) {
+      f_all <- f_fix_eval[[a + 2, a + 1]] + f_env_eval
+      fun[[a + 2, a + 1]] <- eval(f_dmg)
+    }
+    f_all <- f_fix_eval[[a_num, a_num]] + f_env_eval
+    fun[[a_num, a_num]] <- eval(f_dmg)
+    #
+    function(a) fun[[a+2, a+1]]
+  }
+}
+
+n1 <- new_n_t(x = x_rule, a = a_rule)
+n2 <- new_n_t(x = x_rule, a = a_rule)
+
+su_f <- ipm_fun(par_fix$su,
+                f_fix = ~ b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2,
+                f_env = ~ (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta,
+                f_dmg = ~ inv_logit(f_all),
+                n2, n1)
+
+su_m <- ipm_fun(par_fix$su,
+                f_fix = ~ b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2 +
+                          b_0_m + b_z1_m * log(x) + b_a1_m * a + b_a2_m * a^2,
+                f_env = ~ (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta,
+                f_dmg = ~ inv_logit(f_all),
+                n2, n1)
+
+gr_f <- ipm_fun(par_fix$gr,
+                f_fix = ~ b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2,
+                f_env = ~ (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta,
+                f_dmg = ~ dnorm(log(x_), mean = f_all, sd = sigma) / x_,
+                n2, n1)
+
+gr_m <- ipm_fun(par_fix$gr,
+                f_fix = ~ b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2 +
+                          b_0_m + b_z1_m * log(x) + b_a1_m * a + b_a2_m * a^2,
+                f_env = ~ (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta,
+                f_dmg = ~ dnorm(log(x_), mean = f_all, sd = sigma) / x_,
+                n2, n1)
+
+n1 <- new_n_t(x = x_rule, a = a_rule)
+n2 <- new_n_t(s = s_rule, x = x_lmb_rule)
+
+
+
+
+
+...
+
+
+
 
 su <- build_su(node_sg, par_fix$su)
 gr <- build_gr(node_sg, par_fix$gr)
