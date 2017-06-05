@@ -78,7 +78,7 @@ create_demog_func <- function(envir, f1, f2, f3,
     f_all[ state_index ] <<- 
       mapply(`+`, f1_eval[ state_index ], f2_eval, SIMPLIFY = FALSE)
 
-    results[ state_index ] <- 
+    results[ state_index ] <<- 
       lapply(i_seq, function(i) {
         .Internal(assign("a", state_values[i, "a"], envir, FALSE))
         .Internal(assign("f_all", unlist(f_all[ state_index[i, , drop = FALSE] ]) , envir, FALSE))
@@ -94,12 +94,10 @@ f1 <- create_demog_func(env_domain, fun_1, fun_2, fun_3,
 f2 <- f1(1)
 f2(0)
 
-out["1","0"]
-
 system.time({
   f1 <- create_demog_func(env_domain, fun_1, fun_2, fun_3, 
                           list_array, state_index, state_values)
-  for (i in 1:10000) f2 <- f1(1)
+  for (i in 1:10000) {f2 <- f1(1); for (j in 1:10) f2(j)}
 })
   
 
