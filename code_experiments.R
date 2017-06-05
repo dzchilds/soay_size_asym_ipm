@@ -14,7 +14,7 @@ num_states <- do.call(kernel_domain, c("numeric",     list(n1, n2)))
 a_set <- cat_states$a
 
 fun_1 <-  ~ b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2
-fun_2 <-  ~ (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta
+fun_2 <-  ~ (gamma)
 fun_3 <-  ~ inv_logit(f_all)
 
 fun_1 <- f_rhs(fun_1)
@@ -32,27 +32,74 @@ ls.str(env_domain)
 
 list_array <- mk_list_array(cat_states)
 
-create_demog_func <- function(envir, f1, f2, f3, list_array, state_index) {
+state_values <- cbind(a_ = c(tail(a_set, -1), max(a_set)), 
+                      a  = a_set)
+
+state_index <- as.character(state_values)
+attributes(state_index) <- attributes(state_values)
+
+
+test <- list_array
+test[ state_index ] 
+
+
+create_demog_func <- function(envir, f1, f2, f3, 
+                              list_array, state_index, state_values) {
   
   enclos <- baseenv()
   
   a_num <- max(state_index)
   
   f1_eval <- list_array
+
+  i_seq <- seq_len(nrow(state_index))
+
+  # for (i in i_seq) {
+  #   .Internal(assign("a", state_values[i, "a"], envir, FALSE))
+  #   f1_eval[ state_index[i, , drop = FALSE] ] <- 
+  #     list(.Internal(eval(f1, envir, enclos)))
+  # }
   
-  for (a in head(state_index, -1)) {
-    .Internal(assign("a", a, envir, FALSE))
-    f1_eval[[a + 2, a + 1]] <- .Internal(eval(f1, envir, enclos))
+  f1_eval[ state_index ] <- 
+    lapply(i_seq, function(i) {
+      .Internal(assign("a", state_values[i, "a"], envir, FALSE))
+      .Internal(eval(f1, envir, enclos))
+    })
+  
+  results <- f_all <- list_array
+  
+  getter <- function(a) results[[a+2, a+1]]
+  
+  function(i) {
+    # 
+    f2_eval <- .Internal(eval(fun_2, envir, enclos))
+  
+    #
+    f_all[ state_index ] <<- 
+      mapply(`+`, f1_eval[ state_index ], f2_eval, SIMPLIFY = FALSE)
+
+    results[ state_index ] <- 
+      lapply(i_seq, function(i) {
+        .Internal(assign("a", state_values[i, "a"], envir, FALSE))
+        .Internal(assign("f_all", unlist(f_all[ state_index[i, , drop = FALSE] ]) , envir, FALSE))
+        .Internal(eval(f3, envir, enclos))
+      })
+    
+    getter
   }
-  .Internal(assign("a", a_num, envir, FALSE))
-  f1_eval[[a_num, a_num]] <- .Internal(eval(f1, envir, enclos))
-  
-  f1_eval
 }
 
-system.time(
-for (i in 1:10000) 
-  create_demog_func(env_domain, fun_1, fun_2, fun_3, list_array, a_set)
-)
+f1 <- create_demog_func(env_domain, fun_1, fun_2, fun_3, 
+                        list_array, state_index, state_values)
+f2 <- f1(1)
+f2(0)
 
+out["1","0"]
+
+system.time({
+  f1 <- create_demog_func(env_domain, fun_1, fun_2, fun_3, 
+                          list_array, state_index, state_values)
+  for (i in 1:10000) f2 <- f1(1)
+})
+  
 
