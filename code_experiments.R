@@ -1,53 +1,58 @@
-### fastest way to store discrete states
 
-n1 <- 25 # n mesh
-n2 <- 12 # n states
-n_sim <- 1e4
-x_sml <- 1:n1
-x_big <- 1:(n1*n2)
+library(lazyeval)
 
-M_sml <- matrix(rnorm(n1^2), nrow = n1, ncol = n1)
-M_big <- matrix(rnorm(n1 * n1 * n2), nrow = n1, ncol = n1 * n2)
+x_rule <- numeric_midpoint(c(5, 40, 30))
+a_rule <- categorical_integer(c(0, 12))
+
+n1 <- new_n_t(x = x_rule, a = a_rule)
+n2 <- new_n_t(x = x_rule, a = a_rule)
+
+cat_states <- do.call(kernel_domain, c("categorical", list(n1, n2)))
+num_states <- do.call(kernel_domain, c("numeric",     list(n1, n2)))
+
+#
+a_set <- cat_states$a
+
+fun_1 <-  ~ b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2
+fun_2 <-  ~ (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta
+fun_3 <-  ~ inv_logit(f_all)
+
+fun_1 <- f_rhs(fun_1)
+fun_2 <- f_rhs(fun_2)
+fun_3 <- f_rhs(fun_3)
+
+env_params <- new.env()
+env_domain <- new.env(parent = env_params)
+
+list2env(par_fix$su, envir = env_params)
+list2env(do.call(expand.grid, num_states), envir = env_domain)
+
+ls.str(env_params)
+ls.str(env_domain)
+
+list_array <- mk_list_array(cat_states)
+
+create_demog_func <- function(envir, f1, f2, f3, list_array, state_index) {
+  
+  enclos <- baseenv()
+  
+  a_num <- max(state_index)
+  
+  f1_eval <- list_array
+  
+  for (a in head(state_index, -1)) {
+    .Internal(assign("a", a, envir, FALSE))
+    f1_eval[[a + 2, a + 1]] <- .Internal(eval(f1, envir, enclos))
+  }
+  .Internal(assign("a", a_num, envir, FALSE))
+  f1_eval[[a_num, a_num]] <- .Internal(eval(f1, envir, enclos))
+  
+  f1_eval
+}
 
 system.time(
-  for (i in 1:n_sim) {
-    for (j in 1:n2) {
-      (M_sml * M_sml * M_sml * M_sml) %*% x_big[x_sml+2*n1]
-    } 
-    (M_big * M_big * M_big * M_big) %*% x_big
-  })
-
-system.time(
-  for (i in 1:n_sim) {
-    for (j in 1:n2) {
-      (M_sml * M_sml * M_sml * M_sml) %*% x_sml
-      (M_sml * M_sml * M_sml * M_sml) %*% x_sml
-    } 
-  })
+for (i in 1:10000) 
+  create_demog_func(env_domain, fun_1, fun_2, fun_3, list_array, a_set)
+)
 
 
-
-x <- 1:(n1*n2)
-n_calc <- n_sim
-system.time(for (i in 1:n_calc) (M * M * M) %*% x)
-
-###
-
-x <- list()
-x$f <- vector(mode = "list", length = 20)
-names(x$f) <- letters[1:20]
-x$m <- vector(mode = "list", length = 20)
-names(x$m) <- letters[1:20]
-system.time(for (i in 1:1e7) x[["m"]][["d"]] <- addto)
-
-
-x <- mk_list_array(list(c("f","m"), letters[1:20]))
-addto <- 1:1000
-system.time(for (i in 1:1e7) x[["m","a"]] <- addto)
-
-
-x <- mk_list_array(list(c("f","m"), letters[1:20]))
-dum_list <- vector(mode = "list", length = 21)
-names(dum_list) <- letters[1:21]
-x["f",] <- dum_list
-x
