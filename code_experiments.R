@@ -23,6 +23,7 @@ fun_3 <- f_rhs(fun_3)
 
 env_params <- new.env()
 env_domain <- new.env(parent = env_params)
+env_dummy  <- new.env(parent = env_domain)
 
 list2env(par_fix$su, envir = env_params)
 list2env(do.call(expand.grid, num_states), envir = env_domain)
@@ -38,17 +39,10 @@ state_values <- cbind(a_ = c(tail(a_set, -1), max(a_set)),
 state_index <- as.character(state_values)
 attributes(state_index) <- attributes(state_values)
 
-
-test <- list_array
-test[ state_index ] 
-
-
 create_demog_func <- function(envir, f1, f2, f3, 
                               list_array, state_index, state_values) {
   
   enclos <- baseenv()
-  
-  a_num <- max(state_index)
   
   f1_eval <- list_array
 
