@@ -331,6 +331,14 @@ numeric_midpoint <- function(x) {
   rule
 }
 
+numeric_integer <- function() {
+  rule <- list(seq.int(x[1], x[2]), 1, x[2]-x[1]+1)
+  names(rule) <- c("val", "wgt", "num")
+  attr(rule, "state") <- "numeric"
+  attr(rule, "rule") <- "integer"
+  rule
+}
+
 categorical_integer <- function(x) {
   rule <- list(seq.int(x[1], x[2]), 1, x[2]-x[1]+1)
   names(rule) <- c("val", "wgt", "num")
@@ -417,37 +425,6 @@ kernel_domain <- function(state, ...) {
   do.call(c, values)
 }
 
-## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
-## simulation code
-## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
-
-set_lambs <- function(n_t, size, mean, sd) { 
-  val <- attr(n_t, "details")[["val", "x"]]
-  val
-  n_t[["f", '0']] <- size * dnorm(val, mean = mean, sd = sd) / 2
-  n_t[["m", '0']] <- size * dnorm(val, mean = mean, sd = sd) / 2
-  n_t
-}
-
-# set_lambs(n_t, 200, 12, 1.5)
-
-x_rule <- numeric_midpoint(c(5, 40, 40))
-a_rule <- categorical_integer(c(0, 15))
-x_lmb_rule <- numeric_midpoint(c(0.1, 4, 20))
-s_rule <- numeric_integer(c(0, 1))
-t_rule <- numeric_integer(c(0, 1))
-
-n_t <- new_n_t(x = x_rule, s = s_rule, a = a_rule)
-n_t <- set_lambs(n_t, 200, 12, 1.5)
-n_t[["f","0"]]
-attributes(n_t)
-
-
-n_t <- new_n_t(x = x_rule, s = s_rule, a = a_rule)
-
-kernel_domain("numeric", n_t, n_t)
-
-
 assign_elements <- function(vec) {
   list2env(as.list(vec), envir = parent.frame())
 }
@@ -477,22 +454,35 @@ ipm_fun <- function(mod_par, f_fix, f_env, f_dmg, ...) {
     f_fix_eval[[a + 2, a + 1]] <- eval(f_fix)
   }
   f_fix_eval[[a_num, a_num]] <- eval(f_fix)
-
+  
+  #
+  fun <- mk_list_array(cat_states)
+  subset <- function(a) fun[[a+2, a+1]]
+  
   function(i, n_t) {
-    fun <- mk_list_array(cat_states)
     # 
     f_env_eval <- eval(f_env)
     # 
     for (a in head(a_set, -1)) {
-      f_all <- f_fix_eval[[a + 2, a + 1]] + f_env_eval
-      fun[[a + 2, a + 1]] <- eval(f_dmg)
+      . <- f_fix_eval[[a + 2, a + 1]] + f_env_eval
+      fun[[a + 2, a + 1]] <<- eval(f_dmg)
     }
-    f_all <- f_fix_eval[[a_num, a_num]] + f_env_eval
-    fun[[a_num, a_num]] <- eval(f_dmg)
+    . <- f_fix_eval[[a_num, a_num]] + f_env_eval
+    fun[[a_num, a_num]] <<- eval(f_dmg)
     #
-    function(a) fun[[a+2, a+1]]
+    return(subset)
   }
 }
+
+## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
+## simulation code
+## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
+
+x_rule     <- numeric_midpoint(c(5, 40, 40))
+a_rule     <- categorical_integer(c(0, 15))
+x_lmb_rule <- numeric_midpoint(c(0.1, 4, 20))
+s_rule     <- categorical_nominal(c("f", "m"))
+t_rule     <- numeric_integer(c(1, 2))
 
 n1 <- new_n_t(x = x_rule, a = a_rule)
 n2 <- new_n_t(x = x_rule, a = a_rule)
@@ -500,57 +490,73 @@ n2 <- new_n_t(x = x_rule, a = a_rule)
 su_f <- ipm_fun(par_fix$su,
                 f_fix = ~ b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2,
                 f_env = ~ (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta,
-                f_dmg = ~ inv_logit(f_all),
+                f_dmg = ~ inv_logit(.),
                 n2, n1)
 
 su_m <- ipm_fun(par_fix$su,
                 f_fix = ~ b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2 +
                           b_0_m + b_z1_m * log(x) + b_a1_m * a + b_a2_m * a^2,
                 f_env = ~ (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta,
-                f_dmg = ~ inv_logit(f_all),
+                f_dmg = ~ inv_logit(.),
                 n2, n1)
 
 gr_f <- ipm_fun(par_fix$gr,
                 f_fix = ~ b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2,
                 f_env = ~ (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta,
-                f_dmg = ~ dnorm(log(x_), mean = f_all, sd = sigma) / x_,
+                f_dmg = ~ dnorm(log(x_), mean = ., sd = sigma) / x_,
                 n2, n1)
 
 gr_m <- ipm_fun(par_fix$gr,
                 f_fix = ~ b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2 +
                           b_0_m + b_z1_m * log(x) + b_a1_m * a + b_a2_m * a^2,
                 f_env = ~ (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta,
-                f_dmg = ~ dnorm(log(x_), mean = f_all, sd = sigma) / x_,
+                f_dmg = ~ dnorm(log(x_), mean = ., sd = sigma) / x_,
                 n2, n1)
 
-n1 <- new_n_t(x = x_rule, a = a_rule)
-n2 <- new_n_t(s = s_rule, x = x_lmb_rule)
+
+## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
+## Testing -- simulation code
+## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
+
+set_lambs <- function(n_t, size, mean, sd) { 
+  val <- attr(n_t, "details")[["val", "x"]]
+  val
+  n_t[["f", "0"]] <- size * dnorm(val, mean = mean, sd = sd)
+  n_t[["m", "0"]] <- size * dnorm(val, mean = mean, sd = sd)
+  n_t
+}
+# initial 
+n_t <- new_n_t(x = x_rule, s = s_rule, a = a_rule)
+n_t <- set_lambs(n_t, 300, 12, 1.5)
+
+
+a_set <- attributes(n_t)$details[["val", "a"]]
+
+e <- 1
+n_t_1 <- new_n_t(x = x_rule, s = s_rule, a = a_rule)
+
+system.time(for (i in 1:1e3) {
+  # 
+  n_z <- marginal_density(n_t, margin = "x")
+  # 
+  su_f_t <- su_f(e, n_z)
+  su_m_t <- su_m(e, n_z)
+  gr_f_t <- gr_f(e, n_z)
+  gr_m_t <- gr_m(e, n_z)
+  #
+  for (a in head(a_set, -1)) {
+    ( su_f_t(a) * gr_f_t(a) ) n_t[[a+1, "f"]]
+  }
+})
 
 
 
 
-
-...
-
-
-
-
-su <- build_su(node_sg, par_fix$su)
-gr <- build_gr(node_sg, par_fix$gr)
-
-n_z <- marginal_density(n_t, margin = "x")
-su_t <- su(1, n_z)
-gr_t <- gr(1, n_z)
-
-a <- 0
-P <- su_t("f", a) * gr_t("f", a)
-dim(P) <- 
-P %*% get_age(n_t$f, 0)
 
 
 
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
-## Testing
+## Testing -- to be updated...
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 
 x_vals <- seq(5, 40, length = 200)

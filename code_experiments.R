@@ -83,15 +83,53 @@ create_demog_func <- function(envir, f1, f2, f3,
   }
 }
 
-f1 <- create_demog_func(env_domain, fun_1, fun_2, fun_3, 
-                        list_array, state_index, state_values)
-f2 <- f1(1)
-f2(0)
-
 system.time({
   f1 <- create_demog_func(env_domain, fun_1, fun_2, fun_3, 
                           list_array, state_index, state_values)
   for (i in 1:10000) {f2 <- f1(1); for (j in 1:10) f2(j)}
 })
+
+
+## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
+## general messing
+## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
+
+all.vars()
+
+
+pars <- list(a = 1, b = 2)
+node <- list(x = 1:1000)
+
+env_nodes <- new.env()
+env_evals <- new.env(parent = env_nodes)
+
+list2env(node, envir = env_nodes)
+list2env(pars, envir = env_evals)
+
+## using base for the evaluation
+
+form <- ~ {y <- a + b * x}
+expr <- f_rhs(form)
+all.vars(form)
+
+system.time(
+  for (i in 1:1e4) { # number of iterations
+    for (j in 1:15) { # number of categorical states
+      for (k in 1:1) { # number of demographic functions
+        eval(expr, env_evals)
+      } 
+    }
+})
+
+
+env_evals$b
+
+
+
+
+
+
+
+
   
 
