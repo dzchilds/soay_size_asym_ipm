@@ -405,7 +405,7 @@ marginal_density <- function(n_t, margin = "x") {
   n_t
 }
 
-kernel_domain <- function(state, ...) {
+kernel_info <- function(state, what = "val", ...) {
   
   dots <- list(...)
   
@@ -416,7 +416,7 @@ kernel_domain <- function(state, ...) {
   for (i in seq_along(dots)) {
     attribs <- attributes(dots[[n-i+1]])
     is_type <- attribs$state_rules["state",] == state
-    keep <- attribs$details["val", is_type]
+    keep <- attribs$details[what, is_type]
     names(keep) <- paste0(attribs$state_names[is_type], suffix)
     values[[n-i+1]] <- keep
     suffix <- paste0(suffix ,"_")
@@ -432,8 +432,11 @@ assign_elements <- function(vec) {
 ipm_fun <- function(mod_par, f_fix, f_env, f_dmg, ...) {
   #
   dots <- list(...)
-  cat_states <- do.call(kernel_domain, c("categorical", dots))
-  num_states <- do.call(kernel_domain, c("numeric",     dots))
+  #
+  cat_states <- do.call(kernel_info, c("categorical", what = "val", dots))
+  num_states <- do.call(kernel_info, c("numeric",     what = "val", dots))
+  #
+  dims <- do.call(kernel_info, c("numeric", what = "num", dots))
   #
   assign_elements(do.call(expand.grid, num_states))
   # 
@@ -457,21 +460,32 @@ ipm_fun <- function(mod_par, f_fix, f_env, f_dmg, ...) {
   
   #
   fun <- mk_list_array(cat_states)
-  subset <- function(a) fun[[a+2, a+1]]
-  
+  # 
+  subset <- function(a_, a) fun[[a_, a]]
+  # 
   function(i, n_t) {
     # 
     f_env_eval <- eval(f_env)
     # 
     for (a in head(a_set, -1)) {
       . <- f_fix_eval[[a + 2, a + 1]] + f_env_eval
-      fun[[a + 2, a + 1]] <<- eval(f_dmg)
+      K <- eval(f_dmg)
+      dim(K) <- dims
+      fun[[a + 2, a + 1]] <<- K
     }
     . <- f_fix_eval[[a_num, a_num]] + f_env_eval
-    fun[[a_num, a_num]] <<- eval(f_dmg)
+    K <- eval(f_dmg)
+    dim(K) <- dims
+    fun[[a_num, a_num]] <<- K
     #
     return(subset)
   }
+}
+
+age_transitions <- function(a_set) { 
+  i <- as.character(c(tail(a_set, -1), tail(a_set, 1)))
+  j <- as.character(a_set)
+  list(i = i, j = j)
 }
 
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
@@ -525,6 +539,7 @@ set_lambs <- function(n_t, size, mean, sd) {
   n_t[["m", "0"]] <- size * dnorm(val, mean = mean, sd = sd)
   n_t
 }
+
 # initial 
 n_t <- new_n_t(x = x_rule, s = s_rule, a = a_rule)
 n_t <- set_lambs(n_t, 300, 12, 1.5)
@@ -538,18 +553,32 @@ n_t_1 <- new_n_t(x = x_rule, s = s_rule, a = a_rule)
 system.time(for (i in 1:1e3) {
   # 
   n_z <- marginal_density(n_t, margin = "x")
+  #
+  set_j <- age_transitions(a_set)$j
+  set_i <- age_transitions(a_set)$i
   # 
   su_f_t <- su_f(e, n_z)
   su_m_t <- su_m(e, n_z)
   gr_f_t <- gr_f(e, n_z)
   gr_m_t <- gr_m(e, n_z)
   #
-  for (a in head(a_set, -1)) {
-    ( su_f_t(a) * gr_f_t(a) ) n_t[[a+1, "f"]]
+  for (k in 1:nrow()) {
+    # 
+    j <- set_j[k]
+    i <- set_i[k]
+    #
+    n_t_1[["f", i]] <- 
+      ( su_f_t(i, j) * gr_f_t(i, j) ) %*% n_t[["f", j]]
+    n_t_1[["m", i]] <- 
+      ( su_m_t(i, j) * gr_m_t(i, j) ) %*% n_t[["m", j]]
   }
+  # 
+  n_t_1[["f", a_old]] <- n_t_1[["f", a_old]] +
+    ( su_f_t(a_old, a_old) * gr_f_t(a_old, a_old) ) %*% n_t[["f", a_old]]
+  n_t_1[["m", a_old]] <- n_t_1[["m", a_old]] +
+    ( su_f_t(a_old, a_old) * gr_f_t(a_old, a_old) ) %*% n_t[["f", a_old]]
+  
 })
-
-
 
 
 
