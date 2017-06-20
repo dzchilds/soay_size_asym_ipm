@@ -160,77 +160,6 @@ build_expect_f <- function(x) {
 ## utlity functions
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 
-# 
-# winter survival function (sex by age)
-# 
-build_su <- function(int_nod, mod_par) {
-  # store age set and remove from 'int_nod'
-  age_set <- int_nod$a
-  int_nod <- int_nod[names(int_nod) != "a"]
-  # 
-  assign_required(int_nod, mod_par)
-  #
-  states <- mk_list_array(list(c("f","m"), age_set))
-  # 
-  fixed       <- states
-  fixed["f",] <- lapply(age_set, function(a) {
-    b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2
-  })
-  fixed["m",] <- lapply(age_set, function(a) {
-    b_0_m + b_z1_m * log(x) + b_a1_m * a + b_a2_m * a^2 + fixed[["f", a+1]]
-  })
-  # 
-  function(i, n_t) {
-    from <- states
-    # 
-    env_eff <- yr_ef[i,1] + 
-      (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta
-    # 
-    from["f",] <- lapply(age_set, function(a) {
-      inv_logit(env_eff + fixed[["f", a+1]])
-    })
-    from["m",] <- lapply(age_set, function(a) {
-      inv_logit(env_eff + fixed[["m", a+1]])
-    })
-    function(s, a) from[[s, a+1]]
-  }
-}
-
-# 
-# winter growth function (sex by age)
-# 
-build_gr <- function(int_nod, mod_par) {
-  # store age set and remove from 'int_nod'
-  age_set <- int_nod$a
-  int_nod <- int_nod[names(int_nod) != "a"]
-  # 
-  assign_required(int_nod, mod_par)
-  #
-  states <- mk_list_array(list(c("f","m"), age_set))
-  #
-  fixed       <- states
-  fixed["f",] <- lapply(age_set, function(a) {
-    b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2
-  })
-  fixed["m",] <- lapply(age_set, function(a) {
-    b_0_m + b_z1_m * log(x) + b_a1_m * a + b_a2_m * a^2 + fixed[["f", a+1]]
-  })
-  # 
-  function(i, n_t) {
-    from <- states
-    #
-    env_eff <- yr_ef[i,1] + 
-      (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta
-    # 
-    from["f",] <- lapply(age_set, function(a) {
-      dnorm(log(x_), mean = env_eff + fixed[["f", a+1]], sd = sigma) / x_
-    })
-    from["m",] <- lapply(age_set, function(a) {
-      dnorm(log(x_), mean = env_eff + fixed[["m", a+1]], sd = sigma) / x_
-    })
-    function(s, a) from[[s, a+1]]
-  }
-}
 
 # 
 # reproduction function (female only by age)
@@ -457,7 +386,6 @@ ipm_fun <- function(mod_par, f_fix, f_env, f_dmg, ...) {
     f_fix_eval[[a + 2, a + 1]] <- eval(f_fix)
   }
   f_fix_eval[[a_num, a_num]] <- eval(f_fix)
-  
   #
   fun <- mk_list_array(cat_states)
   # 
@@ -482,24 +410,69 @@ ipm_fun <- function(mod_par, f_fix, f_env, f_dmg, ...) {
   }
 }
 
-age_transitions <- function(a_set) { 
-  i <- as.character(c(tail(a_set, -1), tail(a_set, 1)))
-  j <- as.character(a_set)
-  list(i = i, j = j)
+iter_kern <- function(kern, funs, transitions) {
+  # 
+  force(funs)
+  kern <- kern[[2]]
+  #
+  to_states <- as.character(unique(transitions$a_))
+  splits    <- factor(transitions$a_, levels = to_states)
+  # 
+  function(n_t, env, n_z) {
+    # make the list of evaluated demographic functions
+    funs <- lapply(funs, do.call, list(i = env, n_t = n_z))
+    # FIXME!
+    mapply(
+      FUN = function(...) {
+        eval(kern, envir = list(...)) %*% n_t[[a]]
+      }, 
+      a_ = transitions$a_, a = transitions$a, MoreArgs = funs, SIMPLIFY = FALSE
+      ) %>% 
+      split(splits) %>% 
+      Map(function(x) Reduce(`+`, x), .)
+  }
 }
+
+
+expr <- ( ~ paste(a_, a) )[[2]]
+
+mapply(
+  FUN = function(...) {
+    eval(expr, envir = list(...))
+  }, 
+  a_ = P_transitions$a_, a = P_transitions$a,
+  SIMPLIFY = FALSE
+)
 
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 ## simulation code
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 
+index_matrix <- function(s, a) {
+  as.matrix(expand.grid(s = s, a = a))
+}
+
+calculate_P_transitions <- function(a_set) { 
+  a_ <- c(tail(a_set, -1), tail(a_set, 1))
+  a_ <- as.character(a_)
+  a  <- a_set
+  a  <- as.character(a)
+  data.frame(a_ = a_, a = a)
+}
+
+min_a <- 0
+max_a <- 15
+
+a_rule     <- categorical_integer(c(min_a, max_a))
 x_rule     <- numeric_midpoint(c(5, 40, 40))
-a_rule     <- categorical_integer(c(0, 15))
 x_lmb_rule <- numeric_midpoint(c(0.1, 4, 20))
 s_rule     <- categorical_nominal(c("f", "m"))
 t_rule     <- numeric_integer(c(1, 2))
 
-n1 <- new_n_t(x = x_rule, a = a_rule)
-n2 <- new_n_t(x = x_rule, a = a_rule)
+P_transitions  <- calculate_P_transitions(min_a:max_a)
+F_transitions  <- calculate_F_transitions(min_a:max_a)
+
+n2 <- n1 <- new_n_t(x = x_rule, a = a_rule)
 
 su_f <- ipm_fun(par_fix$su,
                 f_fix = ~ b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2,
@@ -527,6 +500,15 @@ gr_m <- ipm_fun(par_fix$gr,
                 f_dmg = ~ dnorm(log(x_), mean = ., sd = sigma) / x_,
                 n2, n1)
 
+P_iter_f <- 
+  iter_kern(kern = ~ su(a_, a) * gr(a_, a), 
+            funs = list(su = su_f, gr = gr_f), 
+            P_transitions)
+
+P_iter_m <- 
+  iter_kern(kern = ~ su(a_, a) * gr(a_, a), 
+            funs = list(su = su_m, gr = gr_m), 
+            P_transitions)
 
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 ## Testing -- simulation code
@@ -544,41 +526,18 @@ set_lambs <- function(n_t, size, mean, sd) {
 n_t <- new_n_t(x = x_rule, s = s_rule, a = a_rule)
 n_t <- set_lambs(n_t, 300, 12, 1.5)
 
+to_states <- unique(P_transitions$a_)
+# 
+P_index_f <- index_matrix("f", to_states)
+P_index_m <- index_matrix("m", to_states)
 
-a_set <- attributes(n_t)$details[["val", "a"]]
-
-e <- 1
+#
+n_z <- marginal_density(n_t, margin = "x")
+# 
 n_t_1 <- new_n_t(x = x_rule, s = s_rule, a = a_rule)
+n_t_1[P_index_f] <- P_iter_f(n_t["f",], 1, n_z)
+n_t_1[P_index_m] <- P_iter_m(n_t["m",], 1, n_z)
 
-system.time(for (i in 1:1e3) {
-  # 
-  n_z <- marginal_density(n_t, margin = "x")
-  #
-  set_j <- age_transitions(a_set)$j
-  set_i <- age_transitions(a_set)$i
-  # 
-  su_f_t <- su_f(e, n_z)
-  su_m_t <- su_m(e, n_z)
-  gr_f_t <- gr_f(e, n_z)
-  gr_m_t <- gr_m(e, n_z)
-  #
-  for (k in 1:nrow()) {
-    # 
-    j <- set_j[k]
-    i <- set_i[k]
-    #
-    n_t_1[["f", i]] <- 
-      ( su_f_t(i, j) * gr_f_t(i, j) ) %*% n_t[["f", j]]
-    n_t_1[["m", i]] <- 
-      ( su_m_t(i, j) * gr_m_t(i, j) ) %*% n_t[["m", j]]
-  }
-  # 
-  n_t_1[["f", a_old]] <- n_t_1[["f", a_old]] +
-    ( su_f_t(a_old, a_old) * gr_f_t(a_old, a_old) ) %*% n_t[["f", a_old]]
-  n_t_1[["m", a_old]] <- n_t_1[["m", a_old]] +
-    ( su_f_t(a_old, a_old) * gr_f_t(a_old, a_old) ) %*% n_t[["f", a_old]]
-  
-})
 
 
 
