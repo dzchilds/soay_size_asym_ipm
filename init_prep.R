@@ -260,7 +260,7 @@ numeric_midpoint <- function(x) {
   rule
 }
 
-numeric_integer <- function() {
+numeric_integer <- function(x) {
   rule <- list(seq.int(x[1], x[2]), 1, x[2]-x[1]+1)
   names(rule) <- c("val", "wgt", "num")
   attr(rule, "state") <- "numeric"
@@ -358,6 +358,16 @@ assign_elements <- function(vec) {
   list2env(as.list(vec), envir = parent.frame())
 }
 
+eval_expr <- function(expr, variable_args, fixed_args = list()) {
+  #
+  mapply_args <- list(
+    FUN = function(...) eval(expr, envir = list(...)),
+    SIMPLIFY = FALSE, MoreArgs = fixed_args
+  ) %>% c(variable_args)
+  # 
+  do.call(mapply, mapply_args)
+}
+
 ipm_fun <- function(mod_par, f_fix, f_env, f_dmg, ...) {
   #
   dots <- list(...)
@@ -413,36 +423,29 @@ ipm_fun <- function(mod_par, f_fix, f_env, f_dmg, ...) {
 iter_kern <- function(kern, funs, transitions) {
   # 
   force(funs)
-  kern <- kern[[2]]
   #
+  transitions_from <- as.character(transitions$a)
   to_states <- as.character(unique(transitions$a_))
-  splits    <- factor(transitions$a_, levels = to_states)
+  transitions_to <- factor(transitions$a_, levels = to_states)
+  # 
+  iter_expr <- as.call(list(quote(`%*%`), kern[[2]], quote(n_t)))
+  #
+  mapply_args <- list(
+    FUN = function(...) eval(iter_expr, envir = list(...)),
+    SIMPLIFY = FALSE, MoreArgs = NA
+  ) %>% c(transitions, n_t = NA)
   # 
   function(n_t, env, n_z) {
-    # make the list of evaluated demographic functions
-    funs <- lapply(funs, do.call, list(i = env, n_t = n_z))
-    # FIXME!
-    mapply(
-      FUN = function(...) {
-        eval(kern, envir = list(...)) %*% n_t[[a]]
-      }, 
-      a_ = transitions$a_, a = transitions$a, MoreArgs = funs, SIMPLIFY = FALSE
-      ) %>% 
-      split(splits) %>% 
-      Map(function(x) Reduce(`+`, x), .)
+    # add the evaluated demographic functions to the list of mapply arguments
+    mapply_args$MoreArgs <<- lapply(funs, do.call, list(i = env, n_t = n_z))
+    # pad out the state list so that it matches number of transitions + add
+    mapply_args$n_t <<- n_t[transitions_from]
+    # 
+    do.call(mapply, mapply_args) %>% 
+      split(transitions_to) %>%
+      lapply(function(x) Reduce(`+`, x))
   }
 }
-
-
-expr <- ( ~ paste(a_, a) )[[2]]
-
-mapply(
-  FUN = function(...) {
-    eval(expr, envir = list(...))
-  }, 
-  a_ = P_transitions$a_, a = P_transitions$a,
-  SIMPLIFY = FALSE
-)
 
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 ## simulation code
@@ -460,17 +463,30 @@ calculate_P_transitions <- function(a_set) {
   data.frame(a_ = a_, a = a)
 }
 
+calculate_F_transitions <- function(a_set) { 
+  a  <- as.character(a_set)
+  a_ <- "0"
+  t_ <- c("s", "t")
+  s_ <- c("f", "m")
+  expand.grid(s_ = s_, t_ = t_, a_ = a_, a = a, stringsAsFactors = FALSE)
+}
+
+
 min_a <- 0
 max_a <- 15
 
+a_0_rule   <- categorical_integer(c(0, 0))
 a_rule     <- categorical_integer(c(min_a, max_a))
-x_rule     <- numeric_midpoint(c(5, 40, 40))
 x_lmb_rule <- numeric_midpoint(c(0.1, 4, 20))
+x_rule     <- numeric_midpoint(c(5, 40, 40))
 s_rule     <- categorical_nominal(c("f", "m"))
-t_rule     <- numeric_integer(c(1, 2))
+t_rule     <- categorical_nominal(c("s", "t"))
+
+##
+## 1. define up the survival-growth iteration functions
+##
 
 P_transitions  <- calculate_P_transitions(min_a:max_a)
-F_transitions  <- calculate_F_transitions(min_a:max_a)
 
 n2 <- n1 <- new_n_t(x = x_rule, a = a_rule)
 
@@ -510,6 +526,92 @@ P_iter_m <-
             funs = list(su = su_m, gr = gr_m), 
             P_transitions)
 
+##
+## 2. define up the fecundity iteration functions
+##
+
+n1 <- new_n_t(x = x_rule, a = a_rule)
+n2 <- new_n_t(s = s_rule, t = t_rule, x = x_lmb_rule, a = a_0_rule)
+
+F_transitions <- calculate_F_transitions(min_a:max_a)
+
+f_fix = ~ b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2
+f_env = ~ yr_ef[i,1] + (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta
+f_dmg = ~ inv_logit(.)
+
+transitions <- F_transitions
+
+#
+dots <- list(n2, n1)
+#
+cat_states <- do.call(kernel_info, c("categorical", what = "val", dots))
+num_states <- do.call(kernel_info, c("numeric",     what = "val", dots))
+#
+dims <- do.call(kernel_info, c("numeric", what = "num", dots))
+#
+assign_elements(do.call(expand.grid, num_states))
+# 
+assign_elements(par_fix$su)
+#
+expect_f <- list(expect_f = build_expect_f(num_states$x))
+assign_elements(expect_f)
+
+f_env <- f_env[[2]]
+f_dmg <- f_dmg[[2]]
+
+transitions_numvals <- transitions
+transitions_numvals$a_ <- as.numeric(transitions$a_)
+transitions_numvals$a  <- as.numeric(transitions$a )
+
+index <- as.matrix(transitions)
+
+fun <- mk_list_array(cat_states)
+subset <- function(a_, a) fun[[a_, a]]
+
+f_fix_eval <- eval_expr(f_fix[[2]], transitions_numvals)
+
+
+
+# 
+function(i, n_t) {
+  # 
+  f_env_eval <- eval(f_env)
+  # 
+  for (a in head(a_set, -1)) {
+    . <- f_fix_eval[[a + 2, a + 1]] + f_env_eval
+    K <- eval(f_dmg)
+    dim(K) <- dims
+    fun[[a + 2, a + 1]] <<- K
+  }
+  . <- f_fix_eval[[a_num, a_num]] + f_env_eval
+  K <- eval(f_dmg)
+  dim(K) <- dims
+  fun[[a_num, a_num]] <<- K
+  #
+  return(subset)
+}
+
+
+
+
+
+rp <- ipm_fun(par_fix$rp,
+              f_fix = ~ b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2,
+              f_env = ~ yr_ef[i,1] + (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta,
+              f_dmg = ~ inv_logit(.),
+              n2, n1)
+
+tw <- ipm_fun(par_fix$tw,
+              f_fix = ~ b_0_f + b_z1_f * log(x) + b_a1_f * a + b_az_f * a * log(x),
+              f_env = ~ yr_ef[i,1] + (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta,
+              f_dmg = ~ inv_logit(.),
+              n2, n1)
+
+
+
+
+
+
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 ## Testing -- simulation code
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
@@ -533,11 +635,9 @@ P_index_m <- index_matrix("m", to_states)
 
 #
 n_z <- marginal_density(n_t, margin = "x")
-# 
-n_t_1 <- new_n_t(x = x_rule, s = s_rule, a = a_rule)
-n_t_1[P_index_f] <- P_iter_f(n_t["f",], 1, n_z)
-n_t_1[P_index_m] <- P_iter_m(n_t["m",], 1, n_z)
 
+n_t[P_index_f] <- P_iter_f(n_t["f",], 1, n_z)
+n_t[P_index_m] <- P_iter_m(n_t["m",], 1, n_z)
 
 
 
