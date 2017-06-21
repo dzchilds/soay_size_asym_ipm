@@ -153,98 +153,12 @@ assign_required <- function(int_nod, mod_par) {
 # 
 build_expect_f <- function(x) {
   dx <- x[2]-x[1]
-  function(n_t, theta) sum(n_t * x^theta) * dx
-}
-
-## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
-## utlity functions
-## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
-
-
-# 
-# reproduction function (female only by age)
-# 
-build_rp <- function(int_nod, mod_par) {
-  # 
-  assign_required(int_nod, mod_par)
-  #
-  fixed <- b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2
-  # 
-  function(i, n_t) {
-    #
-    env_eff <- yr_ef[i,1] + 
-      (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta
-    # 
-    inv_logit(env_eff + fixed)
-  }
-}
-
-# 
-# reproduction function (female only by age)
-# 
-build_tw <- function(int_nod, mod_par) {
-  # 
-  assign_required(int_nod, mod_par)
-  #
-  fixed <- b_0_f + b_z1_f * log(x) + b_a1_f * a + b_az_f * a * log(x)
-  # 
-  function(i, n_t) {
-    #
-    env_eff <- yr_ef[i,1] + 
-      (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta
-    # 
-    inv_logit(env_eff + fixed) * (a > 0) # <- lambs can't have twins
-  }
+  function(n, theta) sum(n * x^theta) * dx
 }
 
 # 
 # lamb size function (female only)
-# 
-build_bw_lmb <- function(int_nod, mod_par) {
-  # 
-  assign_required(int_nod, mod_par)
-  # calculate the terms that don't vary
-  fixed <- b_0_f + is_m * b_0_m + is_tw * b_0_tw + 
-           b_a1_f * a + b_z1_f * log(x) + b_az_f * a * log(x) + b_a2_f * a^2
-  #
-  function(i, n_t) {
-    env_eff <- yr_ef[i,1] + 
-      (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta
-    dnorm(log(x_), fixed + env_eff, sigma) / x_
-  }
-}
 
-build_su_lmb <- function(int_nod, mod_par) {
-  # 
-  assign_required(int_nod, mod_par)
-  # FIXME!
-  a <- 2
-  # calculate the terms that don't vary
-  fixed <- b_0_f + is_m * b_0_m + is_tw * b_0_tw + 
-           b_z1_lm * log(x) + b_a1_f * a + b_a2_f * a^2
-           
-  #
-  function(i, n_t) {
-    env_eff <- yr_ef[i,1]
-    inv_logit(fixed + env_eff)
-  }
-}
-
-build_gr_lmb <- function(int_nod, mod_par) {
-  # 
-  assign_required(int_nod, mod_par)
-  # FIXME!
-  a <- 2
-  # calculate the terms that don't vary
-  fixed <- b_0_f + is_m * b_0_m + is_tw * b_0_tw + 
-           b_z1_lm * log(x) + b_a1_f * a + b_a2_f * a^2
-    
-  #
-  function(i, n_t) {
-    env_eff <- yr_ef[i,1]
-    dnorm(log(x_), fixed + env_eff, sigma) / x_
-  }
-}
 
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 ## utlity functions
@@ -358,7 +272,7 @@ assign_elements <- function(vec) {
   list2env(as.list(vec), envir = parent.frame())
 }
 
-eval_expr <- function(expr, variable_args, fixed_args = list()) {
+mapply_expr <- function(expr, variable_args, fixed_args = list()) {
   #
   mapply_args <- list(
     FUN = function(...) eval(expr, envir = list(...)),
@@ -368,92 +282,100 @@ eval_expr <- function(expr, variable_args, fixed_args = list()) {
   do.call(mapply, mapply_args)
 }
 
-ipm_fun <- function(mod_par, f_fix, f_env, f_dmg, ...) {
+# never used this...
+make_alist <- function(arg_names) {
+  if ( any(arg_names == "") ) stop("missing argument name")
+  args <- replicate(length(arg_names), substitute())
+  names(args) <- arg_names
+  args
+}
+
+ipm_fun <- function(mod_par, f_fix, f_env, f_dmg, cat_trans, ...) {
   #
-  dots <- list(...)
-  #
+  dots <- list(n2, n1)
+  # extract the information we require from the state atrtributes
   cat_states <- do.call(kernel_info, c("categorical", what = "val", dots))
   num_states <- do.call(kernel_info, c("numeric",     what = "val", dots))
-  #
-  dims <- do.call(kernel_info, c("numeric", what = "num", dots))
-  #
-  assign_elements(do.call(expand.grid, num_states))
-  # 
-  assign_elements(mod_par)
-  #
-  expect_f <- list(expect_f = build_expect_f(num_states$x))
-  assign_elements(expect_f)
-  #
-  a_set <- cat_states$a
-  a_num <- length(a_set)
-  
-  f_fix <- f_fix[[2]]
-  f_env <- f_env[[2]]
-  f_dmg <- f_dmg[[2]]
-  
-  f_fix_eval <- mk_list_array(cat_states)
-  for (a in head(a_set, -1)) {
-    f_fix_eval[[a + 2, a + 1]] <- eval(f_fix)
+  array_dims <- do.call(kernel_info, c("numeric",     what = "num", dots))
+  # list containing objects that is invariant across function evaluations
+  fixed_args <- c(do.call(expand.grid, num_states), mod_par)
+  # list containing objects that vary across 
+  variable_args <- cat_trans
+  # FIXME -- hack to make the numeric age states a numeric vector
+  variable_args$a_ <- as.numeric(cat_trans$a_)
+  variable_args$a  <- as.numeric(cat_trans$a )
+  # FIXME -- function to calculate the expectation wrt to density function
+  expect_f <- build_expect_f(num_states$x)
+  # list-array to store the function evaluations
+  eval_func <- mk_list_array(cat_states)
+  # subset function for the above list-array
+  subset <- function(...) {
+    do.call(`[[`, c(x = quote(eval_func), list(...)))
   }
-  f_fix_eval[[a_num, a_num]] <- eval(f_fix)
-  #
-  fun <- mk_list_array(cat_states)
+  # matrix to index into list of evaluated functions 
+  index <- as.matrix(cat_trans)
+  # evaluate the time invariant part of the additive model
+  f_fix_eval <- mapply_expr(f_fix[[2]], variable_args, fixed_args)
   # 
-  subset <- function(a_, a) fun[[a_, a]]
-  # 
-  function(i, n_t) {
+  function(...) {
     # 
-    f_env_eval <- eval(f_env)
-    # 
-    for (a in head(a_set, -1)) {
-      . <- f_fix_eval[[a + 2, a + 1]] + f_env_eval
-      K <- eval(f_dmg)
-      dim(K) <- dims
-      fun[[a + 2, a + 1]] <<- K
-    }
-    . <- f_fix_eval[[a_num, a_num]] + f_env_eval
-    K <- eval(f_dmg)
-    dim(K) <- dims
-    fun[[a_num, a_num]] <<- K
+    f_args <- c(list(...), fixed_args, expect_f = expect_f)
+    .additive <- 
+      mapply_expr(f_env[[2]], list(0), f_args) %>% 
+      mapply(`+`, f_fix_eval, ., SIMPLIFY = FALSE) 
     #
+    v_args <- c(.additive = list(.additive), variable_args)
+    eval_func[index] <<- 
+      mapply_expr(f_dmg[[2]], v_args, fixed_args) %>%
+      lapply(function(x) {
+        dim(x) <- array_dims
+        x
+      })
+    # FIXME -- the above `add dim` stpe is not very efficient
     return(subset)
   }
 }
 
-iter_kern <- function(kern, funs, transitions) {
+
+ipm_kern <- function(kern, funs, cat_trans, ...) {
+  # evaluate set of demographic functions
+  fixed_args <- lapply(funs, do.call, list(...))
+  # evaluate kernel over categorical states
+  mapply_expr(kern[[2]], cat_trans, fixed_args)  
+}
+
+# FIXME
+iter_kern <- function(kern, funs, cat_trans) {
   # 
   force(funs)
   #
-  transitions_from <- as.character(transitions$a)
-  to_states <- as.character(unique(transitions$a_))
-  transitions_to <- factor(transitions$a_, levels = to_states)
+  trans_from <- as.character(cat_trans$a)
+  to_states <- as.character(unique(cat_trans$a_))
+  trans_to <- factor(cat_trans$a_, levels = to_states)
   # 
   iter_expr <- as.call(list(quote(`%*%`), kern[[2]], quote(n_t)))
   #
   mapply_args <- list(
     FUN = function(...) eval(iter_expr, envir = list(...)),
     SIMPLIFY = FALSE, MoreArgs = NA
-  ) %>% c(transitions, n_t = NA)
+  ) %>% c(cat_trans, n_t = NA)
   # 
-  function(n_t, env, n_z) {
+  function(.nt, ...) {
     # add the evaluated demographic functions to the list of mapply arguments
-    mapply_args$MoreArgs <<- lapply(funs, do.call, list(i = env, n_t = n_z))
+    mapply_args$MoreArgs <<- lapply(funs, do.call, list(...))
     # pad out the state list so that it matches number of transitions + add
-    mapply_args$n_t <<- n_t[transitions_from]
+    mapply_args$n_t <<- .nt[trans_from]
     # 
     do.call(mapply, mapply_args) %>% 
-      split(transitions_to) %>%
+      split(trans_to) %>%
       lapply(function(x) Reduce(`+`, x))
   }
 }
 
+
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 ## simulation code
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
-
-index_matrix <- function(s, a) {
-  as.matrix(expand.grid(s = s, a = a))
-}
 
 calculate_P_transitions <- function(a_set) { 
   a_ <- c(tail(a_set, -1), tail(a_set, 1))
@@ -464,23 +386,22 @@ calculate_P_transitions <- function(a_set) {
 }
 
 calculate_F_transitions <- function(a_set) { 
-  a  <- as.character(a_set)
-  a_ <- "0"
+  a_  <- as.character(a_set)
   t_ <- c("s", "t")
   s_ <- c("f", "m")
-  expand.grid(s_ = s_, t_ = t_, a_ = a_, a = a, stringsAsFactors = FALSE)
+  out <- expand.grid(s_ = s_, t_ = t_, a_ = a_, stringsAsFactors = FALSE)
+  cbind(out, a = out$a_)
 }
 
 
 min_a <- 0
 max_a <- 15
 
-a_0_rule   <- categorical_integer(c(0, 0))
 a_rule     <- categorical_integer(c(min_a, max_a))
-x_lmb_rule <- numeric_midpoint(c(0.1, 4, 20))
 x_rule     <- numeric_midpoint(c(5, 40, 40))
 s_rule     <- categorical_nominal(c("f", "m"))
 t_rule     <- categorical_nominal(c("s", "t"))
+x_lmb_rule <- numeric_midpoint(c(0.1, 4, 20))
 
 ##
 ## 1. define up the survival-growth iteration functions
@@ -492,34 +413,32 @@ n2 <- n1 <- new_n_t(x = x_rule, a = a_rule)
 
 su_f <- ipm_fun(par_fix$su,
                 f_fix = ~ b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2,
-                f_env = ~ (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta,
-                f_dmg = ~ inv_logit(.),
-                n2, n1)
+                f_env = ~ yr_ef[i,1] + (gamma + yr_ef[i,2]) * expect_f(n, theta) / x^theta,
+                f_dmg = ~ inv_logit(.additive),
+                P_transitions, n2, n1)
 
 su_m <- ipm_fun(par_fix$su,
                 f_fix = ~ b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2 +
                           b_0_m + b_z1_m * log(x) + b_a1_m * a + b_a2_m * a^2,
-                f_env = ~ (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta,
-                f_dmg = ~ inv_logit(.),
-                n2, n1)
+                f_env = ~ yr_ef[i,1] + (gamma + yr_ef[i,2]) * expect_f(n, theta) / x^theta,
+                f_dmg = ~ inv_logit(.additive),
+                P_transitions, n2, n1)
 
 gr_f <- ipm_fun(par_fix$gr,
                 f_fix = ~ b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2,
-                f_env = ~ (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta,
-                f_dmg = ~ dnorm(log(x_), mean = ., sd = sigma) / x_,
-                n2, n1)
+                f_env = ~ yr_ef[i,1] + (gamma + yr_ef[i,2]) * expect_f(n, theta) / x^theta,
+                f_dmg = ~ dnorm(log(x_), mean = .additive, sd = sigma) / x_,
+                P_transitions, n2, n1)
 
 gr_m <- ipm_fun(par_fix$gr,
                 f_fix = ~ b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2 +
                           b_0_m + b_z1_m * log(x) + b_a1_m * a + b_a2_m * a^2,
-                f_env = ~ (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta,
-                f_dmg = ~ dnorm(log(x_), mean = ., sd = sigma) / x_,
-                n2, n1)
+                f_env = ~ yr_ef[i,1] + (gamma + yr_ef[i,2]) * expect_f(n, theta) / x^theta,
+                f_dmg = ~ dnorm(log(x_), mean = .additive, sd = sigma) / x_,
+                P_transitions, n2, n1)
 
-P_iter_f <- 
-  iter_kern(kern = ~ su(a_, a) * gr(a_, a), 
-            funs = list(su = su_f, gr = gr_f), 
-            P_transitions)
+
+
 
 P_iter_m <- 
   iter_kern(kern = ~ su(a_, a) * gr(a_, a), 
@@ -531,86 +450,59 @@ P_iter_m <-
 ##
 
 n1 <- new_n_t(x = x_rule, a = a_rule)
-n2 <- new_n_t(s = s_rule, t = t_rule, x = x_lmb_rule, a = a_0_rule)
+n2 <- new_n_t(s = s_rule, t = t_rule, x = x_lmb_rule, a = a_rule)
 
 F_transitions <- calculate_F_transitions(min_a:max_a)
 
-f_fix = ~ b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2
-f_env = ~ yr_ef[i,1] + (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta
-f_dmg = ~ inv_logit(.)
-
-transitions <- F_transitions
-
-#
-dots <- list(n2, n1)
-#
-cat_states <- do.call(kernel_info, c("categorical", what = "val", dots))
-num_states <- do.call(kernel_info, c("numeric",     what = "val", dots))
-#
-dims <- do.call(kernel_info, c("numeric", what = "num", dots))
-#
-assign_elements(do.call(expand.grid, num_states))
-# 
-assign_elements(par_fix$su)
-#
-expect_f <- list(expect_f = build_expect_f(num_states$x))
-assign_elements(expect_f)
-
-f_env <- f_env[[2]]
-f_dmg <- f_dmg[[2]]
-
-transitions_numvals <- transitions
-transitions_numvals$a_ <- as.numeric(transitions$a_)
-transitions_numvals$a  <- as.numeric(transitions$a )
-
-index <- as.matrix(transitions)
-
-fun <- mk_list_array(cat_states)
-subset <- function(a_, a) fun[[a_, a]]
-
-f_fix_eval <- eval_expr(f_fix[[2]], transitions_numvals)
-
-
-
-# 
-function(i, n_t) {
-  # 
-  f_env_eval <- eval(f_env)
-  # 
-  for (a in head(a_set, -1)) {
-    . <- f_fix_eval[[a + 2, a + 1]] + f_env_eval
-    K <- eval(f_dmg)
-    dim(K) <- dims
-    fun[[a + 2, a + 1]] <<- K
-  }
-  . <- f_fix_eval[[a_num, a_num]] + f_env_eval
-  K <- eval(f_dmg)
-  dim(K) <- dims
-  fun[[a_num, a_num]] <<- K
-  #
-  return(subset)
-}
-
-
-
-
+su <- ipm_fun(par_fix$su,
+              f_fix = ~ b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2,
+              f_env = ~ yr_ef[i,1] + (gamma + yr_ef[i,2]) * expect_f(n, theta) / x^theta,
+              f_dmg = ~ inv_logit(.additive),
+              F_transitions, n2, n1)
 
 rp <- ipm_fun(par_fix$rp,
               f_fix = ~ b_0_f + b_z1_f * log(x) + b_a1_f * a + b_a2_f * a^2,
-              f_env = ~ yr_ef[i,1] + (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta,
-              f_dmg = ~ inv_logit(.),
-              n2, n1)
+              f_env = ~ yr_ef[i,1] + (gamma + yr_ef[i,2]) * expect_f(n, theta) / x^theta,
+              f_dmg = ~ inv_logit(.additive),
+              F_transitions, n2, n1)
 
 tw <- ipm_fun(par_fix$tw,
               f_fix = ~ b_0_f + b_z1_f * log(x) + b_a1_f * a + b_az_f * a * log(x),
-              f_env = ~ yr_ef[i,1] + (gamma + yr_ef[i,2]) * expect_f(n_t, theta) / x^theta,
-              f_dmg = ~ inv_logit(.),
-              n2, n1)
+              f_env = ~ yr_ef[i,1] + (gamma + yr_ef[i,2]) * expect_f(n, theta) / x^theta,
+              f_dmg = ~ inv_logit(.additive),
+              F_transitions, n2, n1)
+
+bw <- ipm_fun(par_fix$bw_lmb,
+              f_fix = ~ b_0_f + (s_ == "m") * b_0_m + (t_ == "t") * b_0_tw + 
+                b_a1_f * a + b_z1_f * log(x) + b_az_f * a * log(x) + b_a2_f * a^2,
+              f_env = ~ yr_ef[i,1] + (gamma + yr_ef[i,2]) * expect_f(n, theta) / x^theta,
+              f_dmg = ~ dnorm(log(x_), .additive, sigma) / x_,
+              F_transitions, n2, n1)
+
+F1_iter <- 
+  iter_kern(kern = ~ bw(s_, t_, a_, a) * tw(s_, t_, a_, a) * 
+                     rp(s_, t_, a_, a) * su(s_, t_, a_, a), 
+            funs = list(su = su, rp = rp, tw = tw, bw = bw), 
+            F_transitions)
+
+##
+## 3. lamb spring-summer iteration functions
+##
+
+su_lmb <- ipm_fun(par_fix$su_lmb,
+                  f_fix = ~ b_0_f + is_m * b_0_m + is_tw * b_0_tw + 
+                    b_z1_lm * log(x) + b_a1_f * a + b_a2_f * a^2,
+                  f_env = ~ yr_ef[i,1],
+                  f_dmg = ~ inv_logit(.additive),
+                  F_transitions, n2, n1)
 
 
-
-
-
+gr_lmb <- ipm_fun(par_fix$gr_lmb,
+                  f_fix = ~ b_0_f + is_m * b_0_m + is_tw * b_0_tw + 
+                    b_z1_lm * log(x) + b_a1_f * a + b_a2_f * a^2,
+                  f_env = ~ yr_ef[i,1],
+                  f_dmg = ~ dnorm(log(x_), .additive, sigma) / x_,
+                  F_transitions, n2, n1)
 
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 ## Testing -- simulation code
@@ -624,105 +516,36 @@ set_lambs <- function(n_t, size, mean, sd) {
   n_t
 }
 
-# initial 
-n_t <- new_n_t(x = x_rule, s = s_rule, a = a_rule)
-n_t <- set_lambs(n_t, 300, 12, 1.5)
-
-to_states <- unique(P_transitions$a_)
-# 
-P_index_f <- index_matrix("f", to_states)
-P_index_m <- index_matrix("m", to_states)
-
-#
-n_z <- marginal_density(n_t, margin = "x")
-
-n_t[P_index_f] <- P_iter_f(n_t["f",], 1, n_z)
-n_t[P_index_m] <- P_iter_m(n_t["m",], 1, n_z)
-
-
-
-
-
-## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
-## Testing -- to be updated...
-## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
-
-x_vals <- seq(5, 40, length = 200)
-x_lmb_vals <- seq(0.1, 4, length = 200)
-
-nt <- 200 * dnorm(x_vals, mean = 12, sd = 1.5) +
-      300 * dnorm(x_vals, mean = 22, sd = 3.0)
-plot(x_vals, nt)
-
-i_age <- function(a) {
-  seq_along(x_vals)+length(x_vals)*a
+index_matrix <- function(...) {
+  x <- list(...)
+  x <- do.call(cbind, x)
+  which_keep <- grepl("_{1}", names(x))
+  x <- unique(x[which_keep])
+  as.matrix(x)
 }
 
-# survival
-mp <- c(par_fix$survival, list(yr_ef = matrix(0, ncol = 2)))
-nd <- list(x = x_vals, a = 0:20)
-f1 <- build_su(nd, mp)
-f2 <- f1(1, nt)
-plot(x_vals, f2("m", 0), ylim = c(0,1))
+# initial state 
+n_t_0 <- new_n_t(s = s_rule, x = x_rule, a = a_rule)
+# intermediate state
+n_t_I <- new_n_t(s = s_rule, t = t_rule, x = x_lmb_rule, a = a_rule)
+# final state
+n_t_1 <- new_n_t(s_rule, x = x_rule, a = a_rule)
+# initialise
+n_t_0 <- set_lambs(n_t, 300, 12, 1.5)
+# indexing vectors
+P_index_f <- index_matrix(s_ = "f", P_transitions)
+P_index_m <- index_matrix(s_ = "m", P_transitions)
+F_index   <- index_matrix(F_transitions)
 
-# reproduction
-mp <- c(par_fix$reproduction, list(yr_ef = matrix(0, ncol = 2)))
-nd <- list(x = x_vals, a = 0:20)
-f1 <- build_rp(nd, mp)
-f2 <- f1(1, nt)
-plot(x_vals, f2[i_age(1)], ylim = c(0,1))
-
-# twinning
-mp <- c(par_fix$twinning, list(yr_ef = matrix(0, ncol = 2)))
-nd <- list(x = x_vals, a = 0:20)
-f1 <- build_tw(nd, mp)
-f2 <- f1(1, nt)
-plot(x_vals, f2[i_age(1)], ylim = c(0,1))
-
-# growth
-mp <- c(par_fix$growth, list(yr_ef = matrix(0, ncol = 2)))
-nd <- list(x1 = x_vals, x = x_vals, a = 0:20)
-f1 <- build_gr(nd, mp)
-f2 <- f1(1, nt)
-gk <- f2("m", 1)
-dim(gk) <- rep(length(x_vals), 2)
-image(x_vals, x_vals, gk, col = heat.colors(512))
-
-# lamb birth weight
-mp <- c(par_fix$lamb.birth, list(yr_ef = matrix(0, ncol = 2)))
-nd <- list(is_m = c(0,1), is_tw = c(0,1), 
-           x1 = x_lmb_vals, x = x_vals, a = 0:20)
-f1 <- build_bw_lmb(nd, mp)
-f2 <- f1(1, nt)
-dim(f2) <- sapply(nd, length)
-gk <- f2[1,1,,,5]
-image(x_vals, x_lmb_vals, t(gk), col = heat.colors(512))
-
-# lamb survival
-mp <- c(par_fix$lamb.survival, list(yr_ef = matrix(0, ncol = 2)))
-nd <- list(is_m = c(0,1), is_tw = c(0,1), x = x_lmb_vals)
-f1 <- build_su_lmb(nd, mp)
-f2 <- f1(1, nt)
-dim(f2) <- sapply(nd, length)
-plot(x_lmb_vals, f2[1,1,], ylim = c(0,1))
-
-# lamb spring growth
-mp <- c(par_fix$lamb.growth, list(yr_ef = matrix(0, ncol = 2)))
-nd <- list(is_m = c(0,1), is_tw = c(0,1), x1 = x_vals, x = x_lmb_vals)
-f1 <- build_gr_lmb(nd, mp)
-f2 <- f1(1, nt)
-dim(f2) <- sapply(nd, length)
-gk <- f2[1,1,,]
-image(x_lmb_vals, x_vals, t(gk), col = heat.colors(512))
+n_t <- n_t_0
+#
+n_z <- marginal_density(n_t, margin = "x")
+#
+P_kern_f <- 
+  ipm_kern(kern = ~ su(a_, a) * gr(a_, a), 
+           funs = list(su = su_f, gr = gr_f), 
+           P_transitions, i = 1, n = n_z)
 
 
-
-
-
-
-
-
-
-
-
+sapply(P_kern_f, dim)
 
