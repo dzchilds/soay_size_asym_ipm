@@ -8,7 +8,7 @@ options(stringsAsFactors = FALSE)
 ## Read in / process the posterior samples
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 
-par_location <- "~/Dropbox/Shared Folders/Asymm_soay/results/Posteriors"
+par_location <- "~/Dropbox/Asymm_soay/results/Posteriors"
 
 file_names <- c(
   bw_lmb = "Lamb Birth weight corr model Posteriors.Rdata",
@@ -142,16 +142,16 @@ calculate_F2_transitions <- function(a_set) {
 ## simulation code
 ## ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ##
 
-source("ipm_code.R")
+source("ipm_implementation.R")
 
 min_a <- 0
 max_a <- 15
 
 a_rule     <- categorical_integer(c(min_a, max_a))
-x_rule     <- numeric_midpoint(c(5, 40, 40))
+x_rule     <- numeric_midpoint(c(5, 46, 80)) # <- don't need 80 mesh points
 s_rule     <- categorical_nominal(c("f", "m"))
 t_rule     <- categorical_nominal(c("s", "t"))
-x_lmb_rule <- numeric_midpoint(c(0.1, 4, 20))
+x_lmb_rule <- numeric_midpoint(c(0.1, 3, 30))
 
 P_transitions  <- calculate_P_transitions(min_a:max_a)
 F1_transitions <- calculate_F1_transitions(min_a:max_a)
@@ -365,9 +365,26 @@ set_lambs <- function(n_t, size, mean, sd) {
 # initial state 
 n_t_0 <- new_n_t(s = s_rule, x = x_rule, a = a_rule)
 # initialise initial state
-n_t_0 <- set_lambs(n_t_0, 250, 12, 1.5)
+n_t_0 <- set_lambs(n_t_0, 275, 12, 1.5)
 
-sim <- iterate_model(n_t_0, rep(1, 25), 25)
+n_step <- 20
+sim <- iterate_model(n_t_0, rep(1, n_step), n_step)
 
-plot(sapply(lapply(sim, unlist), sum))
+# time series of totla number of sheep
+plot(sapply(lapply(sim, unlist), sum) * x_rule$wgt, type = "l",
+     xlab = "Time", ylab = "Total number of individuals")
+
+# time series of males and females numbers
+sapply(sim, marginal_density, margin = "s") %>%
+  t %>% matplot(type = "l")
+
+# time series of size distribution
+sapply(sim, marginal_density, margin = "x") %>%
+  apply(2, function(x) x/sum(x)) %>% t %>%
+  image(x = seq(0, n_step), y = x_rule$val, z = ., col = heat.colors(1000))
+
+# final size distribution
+lapply(sim, marginal_density, margin = "x")[[length(sim)]] %>%
+  plot(x = x_rule$val, y = .)
+
 
